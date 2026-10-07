@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+.coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.json
+data/*.jsonl
+data/*.log
+# Runtime data and temporary outputs stay local; synthetic fixtures live in tests.
+/data/
+# Local shell artifact; preserve it on disk without versioning it.
+/=

@@ -1,0 +1,112 @@
+[
+  {
+    "faq_id": "insurance-verification",
+    "category": "insurance",
+    "title": "Insurance and coverage verification",
+    "answer": "2care Clinic works with multiple insurers, but coverage, copay, referral, and pre-authorization rules depend on the patient's plan. Bring the insurance card and any referral documents. The front desk can verify benefits before the visit; the scheduling agent must not promise that a service is covered.",
+    "keywords": ["insurance", "coverage", "cashless", "copay", "claim", "referral", "preauthorization", "plan"],
+    "source_label": "demo-clinic-billing-policy-v1",
+    "effective_from": "2026-10-01",
+    "review_after": "2027-01-01"
+  },
+  {
+    "faq_id": "self-pay-concessions",
+    "category": "insurance",
+    "title": "Self-pay rates and financial concessions",
+    "answer": "Self-pay estimates and need-based concessions may be discussed with the billing desk before the appointment. Eligibility is assessed case by case, and the agent cannot quote or guarantee a discount.",
+    "keywords": ["self pay", "cash", "concession", "discount", "financial help", "fees", "cost", "price"],
+    "source_label": "demo-clinic-billing-policy-v1",
+    "effective_from": "2026-10-01",
+    "review_after": "2027-01-01"
+  },
+  {
+    "faq_id": "dermatology-services",
+    "category": "services",
+    "title": "Dermatology consultations and follow-up services",
+    "answer": "The clinic schedules general dermatology consultations and follow-ups for previously assessed skin, hair, and nail concerns. A clinician determines whether a procedure, investigation, medicine, or another specialist is appropriate. The scheduling agent cannot recommend a therapy or assess symptoms.",
+    "keywords": ["therapy", "therapies", "treatment", "services", "dermatology", "skin", "hair", "nail", "procedure"],
+    "source_label": "demo-clinic-service-catalog-v1",
+    "effective_from": "2026-10-01",
+    "review_after": "2027-01-01"
+  },
+  {
+    "faq_id": "provider-mehta-profile",
+    "category": "providers",
+    "title": "Dr. N. Mehta profile and clinic schedule",
+    "answer": "Dr. N. Mehta is a synthetic demo profile listed as an MD and DNB in Dermatology with 12 years of clinical experience and demo registration DEMO-MMC-1042. The profile provides dermatology follow-ups at 2care Clinic in Koramangala, Bengaluru. Appointment times are communicated in IST and must always be checked in the live availability calendar; directory information does not guarantee a slot.",
+    "keywords": ["doctor", "mehta", "credential", "credibility", "qualification", "experience", "available", "schedule"],
+    "source_label": "demo-provider-directory-v1",
+    "effective_from": "2026-10-01",
+    "review_after": "2027-01-01"
+  },
+  {
+    "faq_id": "provider-iyer-joining",
+    "category": "providers",
+    "title": "Dr. Priya Iyer joining date and profile",
+    "answer": "Dr. Priya Iyer is a synthetic demo profile listed as an MD in Dermatology with a dermatosurgery fellowship, 8 years of clinical experience, and demo registration DEMO-KMC-2087. She joins the 2care Clinic Koramangala directory from October 12, 2026. Her actual appointment dates and IST times must be read from the live availability calendar.",
+    "keywords": ["new doctor", "coming", "joining", "from when", "iyer", "credential", "credibility", "qualification", "available"],
+    "source_label": "demo-provider-directory-v1",
+    "effective_from": "2026-10-12",
+    "review_after": "2027-01-01"
+  },
+  {
+    "faq_id": "arrival-guidance",
+    "category": "visit",
+    "title": "When to arrive",
+    "answer": "Patients should normally arrive 15 minutes before the appointment for check-in. New patients or patients with insurance or referral documents should allow additional time if requested by the front desk.",
+    "keywords": ["arrive", "arrival", "early", "late", "check in", "time", "documents"],
+    "source_label": "demo-clinic-visit-policy-v1",
+    "effective_from": "2026-10-01",
+    "review_after": "2027-01-01"
+  },
+  {
+    "faq_id": "late-arrival",
+    "category": "visit",
+    "title": "Late arrival policy",
+    "answer": "If a patient expects to be late, they should contact the front desk as soon as possible. The clinic may shorten, reschedule, or retain the appointment depending on the delay and clinical schedule; the agent must not guarantee that a late arrival will be accommodated.",
+    "keywords": ["late", "delay", "miss", "traffic", "reschedule", "arrival"],
+    "source_label": "demo-clinic-visit-policy-v1",
+    "effective_from": "2026-10-01",
+    "review_after": "2027-01-01"
+  },
+  {
+    "faq_id": "parking-and-transport",
+    "category": "location",
+    "title": "Parking and public transport",
+    "answer": "2care Clinic is in Koramangala, Bengaluru. The synthetic location has limited paid parking in the building and a public parking facility one block away. Patients should allow extra time during busy hours. The demo does not provide live parking availability.",
+    "keywords": ["parking", "car", "vehicle", "transport", "bus", "metro", "directions", "address", "koramangala", "bengaluru", "downtown"],
+    "source_label": "demo-clinic-location-guide-v1",
+    "effective_from": "2026-10-01",
+    "review_after": "2027-01-01"
+  },
+  {
+    "faq_id": "clinic-hours-accessibility",
+    "category": "location",
+    "title": "Clinic hours and accessibility",
+    "answer": "2care Clinic in Koramangala, Bengaluru is open Monday through Saturday from 8:00 AM to 6:00 PM IST. Step-free access and lift access are available. Patients who need additional assistance should tell the front desk before arrival.",
+    "keywords": ["clinic", "hours", "open", "close", "weekend", "accessibility", "wheelchair", "lift", "address"],
+    "source_label": "demo-clinic-location-guide-v1",
+    "effective_from": "2026-10-01",
+    "review_after": "2027-01-01"
+  },
+  {
+    "faq_id": "prescription-pharmacy",
+    "category": "medicines",
+    "title": "Where to fill a prescription",
+    "answer": "A prescription may be filled at a licensed pharmacy chosen by the patient. The synthetic clinic does not require use of a particular pharmacy. Questions about substitutions, interactions, dose, or how to take a medicine must go to the prescribing clinician or pharmacist.",
+    "keywords": ["medicine", "medication", "prescription", "pharmacy", "chemist", "where to buy", "dose", "substitute"],
+    "source_label": "demo-clinic-medicine-policy-v1",
+    "effective_from": "2026-10-01",
+    "review_after": "2027-01-01"
+  },
+  {
+    "faq_id": "medicine-concessions",
+    "category": "medicines",
+    "title": "Medicine discounts and concessions",
+    "answer": "The clinic does not guarantee discounts on prescribed medicines. Patients may ask their insurer, licensed pharmacy, or the clinic billing desk about applicable programs. The agent must not recommend changing brands, quantities, or treatment to reduce cost.",
+    "keywords": ["medicine", "discount", "concession", "coupon", "cheap", "cost", "prescribed", "insurance"],
+    "source_label": "demo-clinic-medicine-policy-v1",
+    "effective_from": "2026-10-01",
+    "review_after": "2027-01-01"
+  }
+]

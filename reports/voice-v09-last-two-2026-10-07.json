@@ -1,0 +1,54 @@
+{
+  "schema_version": "voice-quality-v1-bundle",
+  "source_log": "data/voice-v09.jsonl",
+  "captured_at": "2026-10-07",
+  "segmentation": "call.started through call.ended, including pre-start workflow events",
+  "calls": [
+    {
+      "call_id": "CA33e7fedf68afdcd23fd58d92deba507c",
+      "journey": "appointment lookup, availability search, reschedule held for clinic approval, clean close",
+      "fixture": "tests/fixtures/voice_v09_reschedule_timezone_omission.jsonl",
+      "status": "fail",
+      "hard_failure_count": 1,
+      "observation_count": 0,
+      "metrics": {
+        "assistant_turns": 10,
+        "calls": 1,
+        "patient_turns": 6,
+        "tool_requests": 4,
+        "verified_writes": 1,
+        "write_requests": 1
+      },
+      "issues": [
+        {
+          "code": "exact_application_reply_not_honored",
+          "severity": "failure",
+          "occurrences": 2,
+          "message": "The Live voice omitted the application-required timezone wording from the exact proposal and verified held-request readback."
+        }
+      ]
+    },
+    {
+      "call_id": "CA9a57165730293eb074e8fe50d3502a21",
+      "journey": "clinic-approval confirmation outbound call, identity verification, confirmed appointment readback, clean close",
+      "fixture": "tests/fixtures/voice_v09_clinic_confirmation_pass.jsonl",
+      "status": "pass",
+      "hard_failure_count": 0,
+      "observation_count": 0,
+      "metrics": {
+        "assistant_turns": 4,
+        "calls": 1,
+        "patient_turns": 2,
+        "tool_requests": 0,
+        "verified_writes": 0,
+        "write_requests": 0
+      },
+      "issues": []
+    }
+  ],
+  "interpretation": {
+    "workflow_result": "Both calls completed their intended operational journey without a loop or unsafe write.",
+    "quality_result": "The first call remains promotion-ineligible under the exact-speech contract; the second call is clean.",
+    "reinforcement": "Patient-facing scripts now use 2care Clinic, Koramangala, Bengaluru and speak timezone-aware values as IST rather than UTC+05:30."
+  }
+}

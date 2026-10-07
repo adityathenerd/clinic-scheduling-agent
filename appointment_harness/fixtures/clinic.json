@@ -1,0 +1,141 @@
+{
+  "clock": "2026-10-05T10:00:00+05:30",
+  "patients": [
+    {
+      "patient_id": "patient-001",
+      "display_name": "Asha Rao",
+      "date_of_birth": "1990-04-12",
+      "postal_code": "411001",
+      "phone_e164": "+919000000001",
+      "preferred_language": "en"
+    },
+    {
+      "patient_id": "patient-002",
+      "display_name": "Kabir Shah",
+      "date_of_birth": "1985-08-20",
+      "postal_code": "400001",
+      "phone_e164": "+919000000002",
+      "preferred_language": "en"
+    }
+  ],
+  "caller_authorities": [
+    {
+      "authority_id": "authority-asha-rohan",
+      "patient_id": "patient-001",
+      "caller_display_name": "Rohan Rao",
+      "relationship": "spouse",
+      "status": "active"
+    }
+  ],
+  "appointment_types": [
+    {
+      "appointment_type_id": "dermatology-followup",
+      "display_name": "Dermatology follow-up",
+      "duration_minutes": 30,
+      "prerequisites": []
+    }
+  ],
+  "providers": [
+    {
+      "provider_id": "provider-mehta",
+      "display_name": "Dr. N. Mehta",
+      "specialty": "Dermatology",
+      "appointment_type_ids": ["dermatology-followup"],
+      "location_ids": ["downtown"]
+    },
+    {
+      "provider_id": "provider-iyer",
+      "display_name": "Dr. Priya Iyer",
+      "specialty": "Dermatology",
+      "appointment_type_ids": ["dermatology-followup"],
+      "location_ids": ["downtown"]
+    }
+  ],
+  "availability_calendars": [
+    {
+      "provider_id": "provider-mehta",
+      "appointment_type_id": "dermatology-followup",
+      "location_id": "downtown",
+      "duration_minutes": 30,
+      "dates": {
+        "2026-10-12": ["09:00", "11:30"],
+        "2026-10-13": ["09:00", "15:00"],
+        "2026-10-14": ["10:00", "16:00"],
+        "2026-10-16": ["09:30", "14:30"],
+        "2026-10-19": ["09:00", "15:30"],
+        "2026-10-21": ["11:00", "16:30"],
+        "2026-10-23": ["09:00", "14:00"]
+      }
+    },
+    {
+      "provider_id": "provider-iyer",
+      "appointment_type_id": "dermatology-followup",
+      "location_id": "downtown",
+      "duration_minutes": 30,
+      "dates": {
+        "2026-10-12": ["10:30", "14:00"],
+        "2026-10-13": ["09:30", "16:00"],
+        "2026-10-15": ["09:00", "13:30"],
+        "2026-10-20": ["10:00", "15:00"],
+        "2026-10-22": ["09:30", "14:30"]
+      }
+    }
+  ],
+  "slots": [
+    {
+      "slot_id": "slot-existing",
+      "provider_id": "provider-mehta",
+      "appointment_type_id": "dermatology-followup",
+      "location_id": "downtown",
+      "starts_at": "2026-10-08T09:00:00+05:30",
+      "duration_minutes": 30,
+      "status": "booked",
+      "version": 1
+    },
+    {
+      "slot_id": "slot-1530",
+      "provider_id": "provider-mehta",
+      "appointment_type_id": "dermatology-followup",
+      "location_id": "downtown",
+      "starts_at": "2026-10-09T15:30:00+05:30",
+      "duration_minutes": 30,
+      "status": "available",
+      "version": 1
+    },
+    {
+      "slot_id": "slot-1630",
+      "provider_id": "provider-mehta",
+      "appointment_type_id": "dermatology-followup",
+      "location_id": "downtown",
+      "starts_at": "2026-10-09T16:30:00+05:30",
+      "duration_minutes": 30,
+      "status": "available",
+      "version": 1
+    },
+    {
+      "slot_id": "slot-1100",
+      "provider_id": "provider-mehta",
+      "appointment_type_id": "dermatology-followup",
+      "location_id": "downtown",
+      "starts_at": "2026-10-10T11:00:00+05:30",
+      "duration_minutes": 30,
+      "status": "available",
+      "version": 1
+    }
+  ],
+  "appointments": [
+    {
+      "appointment_id": "appointment-existing",
+      "patient_id": "patient-001",
+      "slot_id": "slot-existing",
+      "provider_id": "provider-mehta",
+      "appointment_type_id": "dermatology-followup",
+      "location_id": "downtown",
+      "starts_at": "2026-10-08T09:00:00+05:30",
+      "status": "scheduled",
+      "version": 1,
+      "visit_reason": "receding hairline follow-up",
+      "prior_treatment_context": "previously prescribed minoxidil"
+    }
+  ]
+}

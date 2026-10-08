@@ -887,6 +887,48 @@ class TranscriptEvaluatorTests(unittest.TestCase):
 
         self.assertNotIn("accepted_follow_up_no_progress", _issue_codes(result))
 
+    def test_exact_gate_reply_cannot_be_adopted_as_normal_turn(self) -> None:
+        result = evaluate_voice_events(
+            [
+                {
+                    "event_type": "patient.turn_processed",
+                    "directive_kind": "say_exactly",
+                    "workflow_before": "awaiting_name_confirmation",
+                    "workflow_after": "active",
+                },
+                {"event_type": "caller.turn", "turn_epoch": 1},
+                {
+                    "event_type": "control.normal_turn_adopted_after_gate",
+                    "turn_epoch": 1,
+                    "activity_token": "normal-turn-1-1",
+                },
+                {"event_type": "control.completed_turn_directive", "turn_epoch": 1},
+            ]
+        )
+
+        self.assertIn(
+            "application_gate_exact_reply_misclassified", _issue_codes(result)
+        )
+        self.assertEqual("fail", result.status)
+
+    def test_exact_gate_reply_without_normal_adoption_passes_branch_check(self) -> None:
+        result = evaluate_voice_events(
+            [
+                {
+                    "event_type": "patient.turn_processed",
+                    "directive_kind": "say_exactly",
+                    "workflow_before": "awaiting_name_confirmation",
+                    "workflow_after": "active",
+                },
+                {"event_type": "control.completed_turn_directive", "turn_epoch": 1},
+                {"event_type": "assistant.application_audio_completed", "turn_epoch": 1},
+            ]
+        )
+
+        self.assertNotIn(
+            "application_gate_exact_reply_misclassified", _issue_codes(result)
+        )
+
     def test_clean_exact_close_has_no_mixed_application_reply_observation(self) -> None:
         result = evaluate_voice_events(
             [

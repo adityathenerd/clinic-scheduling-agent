@@ -412,6 +412,44 @@ class ActorTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("control.normal_turn_liveness_failed", event_types)
         await actor.close()
 
+    async def test_exact_identity_reply_never_starts_normal_turn_watchdog(self) -> None:
+        class IdentityGateThenActive(FakeControlPlane):
+            async def complete_patient_turn(self, *, turn_epoch=None):
+                self.completed_turn_count += 1
+                self.completed_turn_epochs.append(turn_epoch)
+                self._application_owns_completed_turn = False
+                return (
+                    "say_exactly: Thank you. Your identity is confirmed. I'm ready "
+                    "to help with this scheduling callback."
+                )
+
+        control = IdentityGateThenActive(application_owns_completed_turn=True)
+        actor, _, _, _, sink = self.build_actor(
+            control=control,
+            turn_completion_delay=0,
+            speech_renderer=FakeSpeechRenderer(),
+        )
+        await actor.start()
+        await actor.dispatch(SessionEvent("caller.speech_started"))
+        await actor.dispatch(
+            SessionEvent(
+                "voice.input_transcript.delta",
+                {"delta": "Yes, this is Asha Rao speaking"},
+            )
+        )
+        await actor.dispatch(SessionEvent("caller.speech_stopped"))
+        for _ in range(100):
+            event_types = [event["event_type"] for event in sink.events]  # type: ignore[attr-defined]
+            if "control.completed_turn_directive" in event_types:
+                break
+            await asyncio.sleep(0.005)
+
+        self.assertIn("assistant.application_audio_render_started", event_types)
+        self.assertNotIn("control.normal_turn_adopted_after_gate", event_types)
+        self.assertNotIn("control.normal_turn_completed", event_types)
+        self.assertNotIn("control.normal_turn_watchdog_started", event_types)
+        await actor.close()
+
     async def test_application_gate_suppresses_stale_audio_until_directive_is_ready(self) -> None:
         control = FakeControlPlane(
             completed_turn_directive="say_exactly: Identity accepted.",

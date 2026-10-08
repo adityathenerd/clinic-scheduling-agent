@@ -251,6 +251,13 @@ explicit recovery, escalation, or clean close. Instruction acceptance,
 delegation creation, and a first audio frame are telemetry, not terminal proof
 that the request was handled.
 
+The branch predicate includes directive ownership, not only the destination
+workflow state. A gate may transition the workflow to `ACTIVE` while still
+returning an application-owned exact identity or confirmation reply. That branch
+remains under application playback ownership and must not create a normal-turn
+activity or watchdog. Only a model-owned continuation, or an accepted request
+with no exact reply, is adopted as a normal conversational turn.
+
 ## Decision graph
 
 Evaluate this graph for every normalized patient act and significant tool event:

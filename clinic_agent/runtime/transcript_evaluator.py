@@ -39,6 +39,7 @@ _BASELINE_FAILURES = frozenset(
         "follow_on_request_blocked",
         "reschedule_clinic_approval_bypassed",
         "accepted_follow_up_no_progress",
+        "application_gate_exact_reply_misclassified",
     }
 )
 
@@ -79,6 +80,7 @@ _FLAG_MESSAGES = {
     "caller_close_not_honored": "Caller explicitly ended the call, but the assistant continued or stalled instead of closing cleanly.",
     "normal_active_turn_no_progress": "A completed normal ACTIVE caller turn received no downstream progress within its deadline.",
     "accepted_follow_up_no_progress": "An accepted post-task request returned to ACTIVE but produced no tool, completed reply, recovery, or handoff.",
+    "application_gate_exact_reply_misclassified": "An application-owned exact gate reply was incorrectly adopted as a normal conversational turn.",
 }
 
 _WRITE_TOOLS = frozenset(
@@ -317,6 +319,7 @@ def evaluate_voice_events(
     issues.extend(_availability_grounding_issues(rows))
     issues.extend(_normal_turn_liveness_issues(rows))
     issues.extend(_accepted_follow_up_liveness_issues(rows))
+    issues.extend(_application_gate_branch_issues(rows))
     issues = _deduplicate_issues(issues)
     failures = sum(issue.severity == "failure" for issue in issues)
     observations = sum(issue.severity == "observation" for issue in issues)
@@ -642,6 +645,48 @@ def _accepted_follow_up_liveness_issues(
                     "started_at": timestamp,
                     "transcript": event.get("transcript") or "",
                 }
+    return issues
+
+
+def _application_gate_branch_issues(
+    rows: list[Mapping[str, Any]],
+) -> list[VoiceEvaluationIssue]:
+    """Exact application replies and normal continuations are disjoint branches."""
+
+    issues: list[VoiceEvaluationIssue] = []
+    for run in _indexed_call_runs(rows):
+        pending_exact_index: int | None = None
+        for index, event in run:
+            kind = event.get("event_type")
+            if (
+                kind == "patient.turn_processed"
+                and event.get("directive_kind") == "say_exactly"
+            ):
+                pending_exact_index = index
+                continue
+            if pending_exact_index is None:
+                continue
+            if kind == "control.normal_turn_adopted_after_gate":
+                issues.append(
+                    VoiceEvaluationIssue(
+                        code="application_gate_exact_reply_misclassified",
+                        severity="failure",
+                        message=_FLAG_MESSAGES[
+                            "application_gate_exact_reply_misclassified"
+                        ],
+                        event_indexes=(pending_exact_index, index),
+                        evidence=(
+                            f"turn_epoch={event.get('turn_epoch', 'unknown')}",
+                        ),
+                    )
+                )
+                pending_exact_index = None
+            elif kind in {
+                "control.completed_turn_directive",
+                "caller.turn_boundary_detected",
+                "call.ended",
+            }:
+                pending_exact_index = None
     return issues
 
 

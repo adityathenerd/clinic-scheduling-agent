@@ -1,0 +1,38 @@
+{
+  "call_id": "CA68a2a0030819bb606a2061ab54ecd2bf",
+  "hard_failure_count": 3,
+  "issues": [
+    {
+      "code": "workflow_incomplete_at_hangup",
+      "event_indexes": [],
+      "evidence": [],
+      "message": "The call ended with a scheduling workflow still in progress.",
+      "severity": "failure"
+    },
+    {
+      "code": "application_audio_delivery_incomplete",
+      "event_indexes": [99, 195],
+      "evidence": [],
+      "message": "Application-owned speech started but never reached a verified final playback mark.",
+      "severity": "failure"
+    },
+    {
+      "code": "application_gate_exact_reply_misclassified",
+      "event_indexes": [37, 40],
+      "evidence": ["turn_epoch=1"],
+      "message": "An application-owned exact gate reply was incorrectly adopted as a normal conversational turn.",
+      "severity": "failure"
+    }
+  ],
+  "metrics": {
+    "assistant_turns": 2,
+    "calls": 1,
+    "patient_turns": 1,
+    "tool_requests": 0,
+    "verified_writes": 0,
+    "write_requests": 0
+  },
+  "observation_count": 0,
+  "schema_version": "voice-quality-v1",
+  "status": "fail"
+}

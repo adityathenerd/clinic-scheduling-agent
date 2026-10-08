@@ -304,10 +304,15 @@ class CallSessionActor:
                         await self._fail_normal_turn("completed_turn_failed")
                     return None
                 directive = event.data.get("directive")
+                exact_application_reply = bool(
+                    directive
+                    and str(directive).casefold().startswith("say_exactly:")
+                )
                 returned_to_normal = (
                     gate_owned_turn
                     and self.control_plane.normal_conversation_active
                     and bool(transcript)
+                    and not exact_application_reply
                 )
                 if returned_to_normal:
                     await self._adopt_normal_turn_after_gate(turn_epoch)
@@ -316,7 +321,7 @@ class CallSessionActor:
                     # fresh instruction can produce caller-visible output.
                     self._clear_application_gate(turn_epoch)
                 if directive:
-                    plain_directive = not str(directive).casefold().startswith("say_exactly:")
+                    plain_directive = not exact_application_reply
                     if returned_to_normal and plain_directive and self._has_quarantined_work():
                         delivery_mode = await self._release_quarantined_work()
                     else:

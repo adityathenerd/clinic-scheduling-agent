@@ -492,6 +492,10 @@ Promotion requires:
 
 ## Intended demo story
 
+For a complete timed narration, screen order, call annotations, harness component
+map, commands, expected outputs, and closing script, use the
+[Loom Presentation Guide](docs/LOOM_PRESENTATION_GUIDE.md).
+
 1. Run a complete patient conversation.
 2. Show the transcript, tool trace, and authoritative final state.
 3. Run the evaluation suite and expose a deliberate failure.

@@ -1,6 +1,11 @@
 # Voice Acceptance Test Plan
 
-Status date: 2026-10-06  
+Status date: 2026-10-08
+
+Current snapshot: the real Twilio/OpenAI path has been exercised repeatedly.
+The deterministic repository suite passes 401 tests; preserved voice artifacts
+include both rejected runs and later passing regressions. Scenario tables below
+retain their point-in-time labels so the project does not erase historical gaps.
 Purpose: preflight and regression-test the voice scheduling agent around real PSTN runs, with an auditable decision path from application logs.
 
 ## Evidence labels
@@ -357,7 +362,7 @@ the exact-reply gate, including timezone wording. Credential-free Live wire repl
 proves the component contracts under modeled silence; actual provider resumption,
 spoken recovery, and PSTN playback still require a human-owned recorded run.
 
-- A real PSTN call and real OpenAI Live session were reached in V01. The fixed behavior remains unverified until V02 is completed.
+- A real PSTN call and real OpenAI Live session were reached in V01. V02 then verified the V01 runtime fixes, and later preserved runs cover confirmation-loop rejection, a passing reschedule, follow-on booking, identity-state handling, active-turn liveness, and clinic-confirmation notification. See the dated artifacts for each claim.
 - Twilio's account and configured number passed the read-only probe, but trial permission for bidirectional Media Streams is learned only from the actual attempt.
 - The demo always associates the call with synthetic `patient-001` and uses low-assurance name confirmation. Caller ID is not authentication.
 - A human handoff is a persisted simulated request, not a live phone transfer to a staffed front desk.

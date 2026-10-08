@@ -1,7 +1,13 @@
 # Evaluation Harness
 
-Status: Workstream recommendation complete  
-Last updated: 2026-10-05
+Status: Implemented and demonstrated
+Last updated: 2026-10-08
+
+The current harness evaluates scripted scenarios using transcript evidence,
+structured tool/workflow traces, and authoritative final scheduler state. The
+saved comparison improves from 10/11 to 11/11 scenarios with no prior-pass
+regression, while 16/16 negative controls prove the evaluator can reject known
+bad evidence. The original recommendation below is preserved as design history.
 
 Implementation constraint: Python 3.11+ only. The patient simulator, fake scheduler, recorder, assertions, runner, reporting, and tests must not introduce another application runtime. On the current Windows host, use the `py` launcher.
 

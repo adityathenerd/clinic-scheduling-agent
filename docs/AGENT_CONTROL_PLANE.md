@@ -1,8 +1,8 @@
 # Agent Control Plane
 
-Status: Draft v0.2  
-Owner: Primary design chat  
-Last updated: 2026-10-05
+Status: Implemented prototype; retained as the authoritative control-plane contract
+Owner: Primary design chat
+Last updated: 2026-10-08
 
 Implementation constraint: Python 3.11+ only. On the current Windows host, use the `py` launcher.
 

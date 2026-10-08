@@ -1,7 +1,7 @@
 # Persistence Architecture
 
-Status: implemented prototype  
-Last updated: 2026-10-05  
+Status: Implemented prototype
+Last updated: 2026-10-08
 Constraint: Python 3.11+ only
 
 ## Decision

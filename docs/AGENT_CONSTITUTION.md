@@ -1,6 +1,6 @@
 # Agent Constitution
 
-> Status: **Provisional v0.2 — definition verified; scope awaits user confirmation.**
+> Status: **Submission v1.0 — implemented for the synthetic prototype; production use requires clinic policy and security ratification.**
 
 ## Working definition
 
@@ -23,7 +23,7 @@ The working definition was checked against two primary-source usages:
 - [Anthropic's discussion of AI constitutions](https://www-cdn.anthropic.com/9214f02e82c4489fb6cf45441d448a1ecd1a3aca/claudes-constitution.pdf) treats a constitution as a foundational set of principles that guides an AI system's behavior and resolves conflicts among lower-level instructions.
 - [GitHub Spec Kit's project constitution](https://github.com/github/spec-kit/blob/main/.specify/memory/constitution.md) treats a constitution as binding, versioned project principles that gate plans and changes and require a governed amendment process.
 
-This draft intentionally uses a hybrid of those meanings: it governs the runtime agent's behavior **and** the evaluation and change-control process that may alter that behavior. It does not yet impose general contributor conventions such as language choice, formatting, branch policy, or code coverage. That boundary remains provisional pending user confirmation.
+This constitution intentionally uses a hybrid of those meanings: it governs the runtime agent's behavior **and** the evaluation and change-control process that may alter that behavior. It does not impose general contributor conventions such as formatting, branch policy, or code-coverage targets; those do not belong in the patient-safety authority model. A production clinic must ratify the identity, privacy, urgency, and escalation policies before deployment.
 
 ## Order of precedence
 

@@ -1,15 +1,15 @@
 # Mission Plan
 
-Status: Active  
-Last updated: 2026-10-05  
-Current phase: Control-plane implementation and bounded voice integration
+Status: Complete for submission
+Last updated: 2026-10-08
+Current phase: Submission packaging and recorded walkthrough
 
 ## TL;DR
 
 - **Objective:** Build a focused clinic scheduling agent and an evaluation loop that demonstrates measurable, regression-safe improvement.
-- **Present state:** The Python-only architecture and all workstream recommendations are integrated. The primary voice path is GPT-Live delegating to GPT-6 Sol at low reasoning effort; call mechanics and mutation contracts have 45 passing tests.
-- **Primary uncertainty:** The synthetic clinic policy, identity model, and approved urgent-handoff policy remain open. The selected GPT-Live path still needs a bounded integration proof.
-- **Immediate next action:** Freeze the minimum clinic policies, implement the typed scheduling state machine and fake backend, then run the 60-minute GPT-Live spike against those stable contracts.
+- **Present state:** The Python-only agent, Twilio/OpenAI voice path, explicit state machine, synthetic scheduler, clinic portal, transcript evaluator, and regression-safe improvement loop are implemented. The repository passed 401 tests on 2026-10-08. The saved evaluation moves from 10/11 scenarios with two critical failures to 11/11 with zero critical or major failures, 16/16 negative controls detected, and no prior-pass regressions.
+- **Primary uncertainty:** Production identity proofing, real EHR integration, staffed escalation, noisy-audio coverage, and multi-process/load behavior remain deliberately outside the submission prototype.
+- **Immediate next action:** Record the walkthrough, make the private GitHub repository accessible to reviewers, and submit the prepared form responses.
 
 ## Objective and success
 
@@ -69,7 +69,7 @@ The user's prior RiderPal project used an OpenAI realtime voice stack and preloa
 | Keep telephony provider behind an adapter | Recalled Plivo implementation and public Twilio implementation differ | 2026-10-04 | Final demo provider is selected |
 | Use one actor per call with supervisor-owned lifecycle | Serializes mutable session state while allowing bounded I/O concurrency | 2026-10-05 | Load or runtime evidence shows a simpler reducer is sufficient |
 | Use Python 3.11+ for all implementation | Explicit user constraint; one runtime reduces setup and debugging surface | 2026-10-05 | Only an explicit user reversal changes this constraint |
-| Demonstrate inbound voice and defer full outbound mechanics | The task requires real conversation, not both call directions | 2026-10-05 | Submission rubric or demo need requires outbound |
+| Demonstrate the outbound callback path; retain inbound mechanics without requiring an inbound number for the demo | The trial account and verified caller path made outbound testing reliable, while the exercise requires a real conversation rather than both directions | 2026-10-06 | A deployment explicitly requires inbound provisioning |
 
 ## Assumptions and unresolved questions
 
@@ -79,7 +79,7 @@ The user's prior RiderPal project used an OpenAI realtime voice stack and preloa
 | Prototype can use synthetic patient and clinic data | Assumption | High | High | Confirm before implementation |
 | Phone match is not sufficient authentication | Assumption | High | Medium | Select simulated verification policy |
 | A custom state machine remains clearer than LangGraph for the initial slice | Assumption | High | Medium | Reassess after the executable graph exists |
-| Inbound booking is the primary demo | Assumption | Medium | Medium | Confirm desired call direction |
+| Outbound callback is sufficient for the recorded demo; inbound remains supported at the adapter boundary | Resolved decision | High | Low | Revisit only if the reviewer requires an inbound number |
 | Telephony remains outside the deterministic source-of-truth eval core | Decision | High | Medium | Add a voice/delegation overlay rather than replacing deterministic tests |
 | The public Twilio code may differ from the recalled Plivo version | Question | — | Medium | User clarification or link to the Plivo version |
 | GPT-Live delegation will satisfy the required event and cancellation semantics within 60 minutes | Assumption | Medium | Medium | Run the bounded spike; fall back immediately if a gate fails |
@@ -95,27 +95,27 @@ The user's prior RiderPal project used an OpenAI realtime voice stack and preloa
 | Improvement loop | Failure-to-change-to-regression cycle | Evaluation harness | Before/after run passes gates |
 | Submission | README, design note, recording | Runnable project | Checklist complete |
 | Call mechanics | Minimal telephony and streaming boundary | Control-plane interfaces | `workstreams/CALL_MECHANICS.md` recommendation |
-| Voice-stack selection | GPT-Live/Sol-low recommendation, fallback, and cost model | Call and control requirements | Decision integrated; bounded spike remains |
+| Voice-stack selection | GPT-Live/Sol-low recommendation, fallback, and cost model | Call and control requirements | Decision integrated and live-tested |
 
 ## Now / Next / Later
 
 ### Now
 
-- Freeze minimum synthetic clinic, identity, and urgent-handoff policies.
-- Convert the control-plane draft into typed schemas and executable transitions.
-- Implement the deterministic fake scheduler and source-of-truth eval path for create, edit, delete/cancel, and post-cancellation follow-up.
+- Record one successful voice journey and the reproducible baseline-to-reinforced evaluation loop.
+- Verify reviewer access to the private repository or make the intended snapshot public.
+- Submit the repository, recording, and one-page design note.
 
 ### Next
 
-- Run the 60-minute GPT-Live → Sol-low delegation spike against a stub read tool and the real event contracts.
-- Keep GPT-Live if every integration gate passes; otherwise switch the `VoiceEngine` adapter to `gpt-realtime-2.1`.
-- Build the baseline failure, controlled improvement artifact, and full regression rerun.
+- If the project advances beyond the exercise, replace demo identity verification with clinic-approved patient/proxy verification.
+- Integrate a real scheduling/EHR sandbox, transactional outbox, staffed escalation, and production observability.
+- Extend voice testing to noisy audio, languages, ambiguous dates, disconnects, and concurrent carrier calls.
 
 ### Later
 
-- Connect the proven control plane to the Twilio adapter for one inbound demonstration.
-- Record the walkthrough.
-- Tighten the one-page design note.
+- Run monitored PSTN load and failure testing.
+- Add hidden scenario variants and mutation testing to reduce evaluator overfitting.
+- Reassess framework and model choices only if measured production constraints justify more complexity.
 
 ## Risks and controls
 
@@ -131,16 +131,17 @@ The user's prior RiderPal project used an OpenAI realtime voice stack and preloa
 
 ## Completion criteria for this phase
 
-- README reflects the conversation and original exercise.
-- Constitution draft has a clear definition and amendment model.
-- User confirms or corrects the constitution's scope.
-- Open assumptions are narrowed enough to begin implementation.
+- README exposes one command for the agent and one for the evaluation loop.
+- The design note and AI-use disclosure are submission-ready.
+- Baseline and reinforced reports demonstrate a repaired failure without prior-pass regression.
+- The full local test suite passes.
+- The recording URL and reviewer repository access are supplied before form submission.
 
 ## Cold-pickup handoff
 
-- **Last completed action:** Added typed edit/cancel/follow-up contracts to the GPT-Live → Sol-low architecture; all 45 tests pass.
-- **Current working state:** Voice roles, fallback, delegation invalidation, and eval implications are fixed; clinic policy and scheduling control-plane implementation remain next.
-- **Exact next action:** Select the synthetic clinic and identity policy, then encode the guarded scheduling state and tool contracts in Python.
+- **Last completed action:** Stabilized the live voice workflow, preserved failing and passing transcript evidence, and verified all 401 repository tests.
+- **Current working state:** `main` matches `origin/main`; the implementation and submission documentation are complete. The repository remains private and the screen-recording URL is not yet available.
+- **Exact next action:** Record the prepared walkthrough, verify reviewer repository access, and enter the final personal/time/recording fields in the submission form.
 - **Open these files first:** `README.md`, `docs/IMPLEMENTATION_PLAN.md`, `docs/AGENT_CONTROL_PLANE.md`, `docs/AGENT_CONSTITUTION.md`, `docs/MISSION_PLAN.md`.
 - **Do not repeat:** The distinction among offline evaluation, live protection, and post-run improvement is already settled.
 - **Context that must not be lost:** RyderPal's preloaded-context insight is retained, but live state and sensitive actions require stricter validation.
@@ -157,3 +158,4 @@ The user's prior RiderPal project used an OpenAI realtime voice stack and preloa
 | 2026-10-05 | Python-only constraint applied and call-mechanics core verified with 34 tests | Keep one runtime and make concurrency assumptions executable |
 | 2026-10-05 | Committed GPT-Live → GPT-6 Sol-low, Twilio adapter, Realtime fallback, and explicit state machine | Consolidate the runtime while keeping permissions and state deterministic |
 | 2026-10-05 | Delegation lifecycle and stale-result safety propagated across control plane, call mechanics, and harness | Prevent late model work from becoming speech or side effects after the caller changes course |
+| 2026-10-08 | Submission snapshot verified with 401 tests, real voice evidence, and an 11/11 reinforced evaluation | Close the loop and replace implementation-era next steps with the actual submission handoff |

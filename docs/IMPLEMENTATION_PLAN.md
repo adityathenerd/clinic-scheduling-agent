@@ -1,7 +1,12 @@
 # Implementation Plan
 
-Status: Active  
-Last updated: 2026-10-05
+Status: Implemented; retained as the build-sequence decision record
+Last updated: 2026-10-08
+
+Current verification: the planned Python-only vertical slice, Twilio/OpenAI voice
+path, guarded scheduler, clinic portal, and evaluation loop are implemented. The
+repository passed 401 tests on 2026-10-08. The phased plan below is preserved to
+show sequencing and tradeoffs rather than rewritten as if it were the final system.
 
 ## Governing constraint
 

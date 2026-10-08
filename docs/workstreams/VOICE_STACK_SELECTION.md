@@ -1,11 +1,20 @@
 # Voice Stack Selection
 
-Status: Workstream recommendation complete  
-Last updated: 2026-10-05  
-Decision owner: voice-stack workstream  
+Status: Implemented and live-tested
+Last updated: 2026-10-08
+Decision owner: voice-stack workstream
 Decision horizon: six-to-eight-hour submission build, not production procurement
 
-## Recommendation
+The selected consolidated OpenAI voice/reasoning path and Twilio transport were
+implemented and exercised in real outbound calls. The analysis below is retained
+to explain the selection rather than retrofitted into a post-hoc conclusion.
+
+## Original recommendation and implemented outcome
+
+The configured Twilio trial account passed the live `<Connect><Stream>`
+capability gate and completed outbound calls, so the submission implemented the
+recommended Twilio → OpenAI Live → Responses/Python path. The account-specific
+result does not erase the vendor restriction risk documented below.
 
 Use **GPT-Live with a GPT-6 Sol backend at `reasoning.effort: "low"`** for the first submission implementation attempt, entirely in **Python 3.11+**. Keep scheduling policy, authorization gates, writes, reconciliation, and final-state verification in the application-owned control plane.
 
@@ -183,7 +192,7 @@ Evaluation harness
 
 This boundary keeps the most consequential blast radius independent of the voice vendor. A provider can be replaced without rewriting the clinic's definition of an authorized booking.
 
-## Validation spike
+## Preserved validation-spike plan
 
 ### Twilio account-capability gate
 

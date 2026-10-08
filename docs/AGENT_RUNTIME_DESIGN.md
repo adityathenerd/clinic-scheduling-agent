@@ -1,7 +1,7 @@
 # Agent Runtime Design
 
-Status: Implementation-ready design  
-Last updated: 2026-10-05
+Status: Implemented and live-tested
+Last updated: 2026-10-08
 
 ## Governing idea
 

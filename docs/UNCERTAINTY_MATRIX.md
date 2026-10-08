@@ -1,7 +1,12 @@
 # Uncertainty Matrix and Parallel Workstreams
 
-Status: Active  
-Last updated: 2026-10-05
+Status: Historical planning snapshot; resolved decisions are implemented
+Last updated: 2026-10-08
+
+This matrix is preserved as the uncertainty map used before implementation. For
+the current system state, use `README.md`, `docs/MISSION_PLAN.md`, the saved
+evaluation reports, and the dated voice-run artifacts. Unresolved production
+risks remain valid unless a later document explicitly closes them.
 
 ## Purpose
 

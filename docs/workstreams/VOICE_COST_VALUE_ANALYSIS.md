@@ -1,10 +1,14 @@
 # GPT-Live vs Realtime: Cost and Value Analysis
 
-Status: Decision analysis complete  
-Last updated: 2026-10-05  
+Status: Decision analysis complete; selected path implemented
+Last updated: 2026-10-08
 Scope: OpenAI inference cost and architectural value for the clinic-scheduling submission
 
-## Decision
+## Decision and outcome
+
+The selected GPT-Live/Sol-low path and Twilio transport were subsequently
+implemented and exercised in live outbound calls. The original go/no-go analysis
+below remains useful as the evidence and fallback record.
 
 Prefer **GPT-Live with a GPT-6 Sol backend at `reasoning.effort: "low"`** for the first implementation attempt. Keep **OpenAI Realtime as the bounded model-layer fallback** if the Live integration does not clear a 60-minute connectivity, delegation, interruption, and traceability spike. Treat telephony separately: the current Twilio free trial blocks `<Stream>`, so the existing account must pass a capability check before Twilio is accepted as the demo transport.
 
@@ -243,7 +247,7 @@ See [GPT-5.6 Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra)
 
 Use `gpt-realtime-2.1`, not mini, if the GPT-Live spike fails. Preserve all application-owned guards. Consider mini only after it independently passes every critical scenario.
 
-## Sixty-minute go/no-go spike
+## Preserved sixty-minute go/no-go spike
 
 The first ten minutes are a transport gate. Check whether the existing Twilio account can execute a minimal `<Connect><Stream>` call with already-provisioned, verified numbers. Current trial documentation blocks `<Stream>` even though it allows limited inbound and outbound calling, and purchasing a number is documented as upgrade-only. Do not purchase or upgrade anything as part of the spike. If streaming is blocked, switch the demo to synthetic or browser audio and continue evaluating GPT-Live; switching to Realtime would not remove the same Twilio transport restriction.
 

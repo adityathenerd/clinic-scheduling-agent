@@ -1,7 +1,7 @@
 # Call Mechanics Test Matrix
 
-Status: Executable GPT-Live/delegation contract core complete  
-Last updated: 2026-10-05
+Status: Implemented and incorporated into the 401-test repository suite
+Last updated: 2026-10-08
 
 ## Test philosophy
 

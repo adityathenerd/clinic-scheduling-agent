@@ -1,6 +1,6 @@
 # Clinic Scheduling Agent
 
-> Status: design and initial runtime phase. The control-plane design is active, and the Python call-session concurrency core has executable tests.
+> Status: submission-ready prototype. The Twilio/OpenAI voice path, deterministic control plane, clinic portal, guarded scheduling tools, and before/after evaluation loop are implemented. The repository passed 401 tests on 2026-10-08.
 
 ## What this project is
 
@@ -247,11 +247,11 @@ Transitions are controlled by deterministic invariants. For example, a booking t
 
 The first implementation uses a small explicit Python state machine, not LangGraph. A framework can be reconsidered only if the executable graph becomes difficult to understand or extend without it. Independent I/O can still run concurrently, and slow-changing context can be cached without treating it as authoritative.
 
-### Voice fallback and time box
+### Voice selection outcome
 
-The team will spend at most 60 minutes proving the voice path end to end. The first 10 minutes are a transport gate: inspect the existing Twilio account and Active Numbers, then make one minimal `<Stream>` attempt using already provisioned verified numbers. [Current Twilio trial documentation](https://www.twilio.com/docs/usage/trials/try-out-voice) permits limited calls but blocks custom `<Stream>` and `<ConversationRelay>` TwiML, so a blocked trial account falls back to synthetic or browser audio while retaining the Twilio adapter. No number purchase, account upgrade, or spending occurs without explicit user authorization.
+The original plan time-boxed a Twilio capability gate because published trial restrictions could have blocked custom streaming TwiML. The configured trial account passed the real `<Connect><Stream>` path without a purchase or upgrade, so the submission uses Twilio for outbound calls and OpenAI Live for spoken interaction. The repository retains synthetic adapters for deterministic tests and local development.
 
-The remaining spike tests GPT-Live delegation: event correlation, interruption handling, stale-work suppression, guarded tool execution, and verified speech after a write. If the Live model integration fails, the same `VoiceEngine` contract may use `gpt-realtime-2.1`. Realtime is a model-layer fallback; it does not bypass a Twilio `<Stream>` restriction.
+The completed spike exercised event correlation, interruption handling, stale-work suppression, guarded tool execution, and application-verified speech after writes. `gpt-realtime-2.1` remains an adapter-level contingency, not a second active runtime or a way around carrier restrictions.
 
 ### Tool layer
 
@@ -555,7 +555,7 @@ Start the signed webhook and bidirectional Media Streams server. Give each
 acceptance scenario its own database and JSONL decision log:
 
 ```powershell
-py -3.11 -m clinic_agent --serve-voice --host 127.0.0.1 --port 8001 --dashboard-port 8000 --database data/voice-v07.db --voice-log data/voice-v07.jsonl
+py -3.11 -m clinic_agent --serve-voice --host 127.0.0.1 --port 8001 --dashboard-port 8000 --database data/voice-demo.db --voice-log data/voice-demo.jsonl
 ```
 
 `PUBLIC_BASE_URL` must be the public HTTPS origin of a tunnel or deployment forwarding to port 8001. Configure no Twilio webhook manually for the outbound demo: the create-call request supplies `${PUBLIC_BASE_URL}/twilio/voice`, and that signed webhook returns a `<Connect><Stream>` target at `wss://.../twilio/media`.
@@ -572,8 +572,8 @@ After the call, render the high-signal state/tool timeline and retain the JSONL
 file as acceptance evidence:
 
 ```powershell
-py -3.11 -m clinic_agent --summarize-voice-log --voice-log data/voice-v07.jsonl
-Get-Content data\voice-v07.jsonl
+py -3.11 -m clinic_agent --summarize-voice-log --voice-log data/voice-demo.jsonl
+Get-Content data\voice-demo.jsonl
 ```
 
 Raw transcript content is redacted unless `VOICE_LOG_TRANSCRIPTS=1`; API keys,
@@ -599,6 +599,12 @@ failure, the clean clinic-confirmation control, and the response-copy
 reinforcement are preserved in the
 [V09 last-two-calls quality report](artifacts/voice_run_v09_last_two_quality_report_2026-10-07.md)
 and its [machine-readable report](reports/voice-v09-last-two-2026-10-07.json).
+The strongest live before/after example is the consecutive V10 gate-branch pair:
+the evaluator rejected call `CA68a2a0030819bb606a2061ab54ecd2bf`, commit
+`5ee215c` separated exact application replies from normal-turn liveness, and the
+next call `CA76484e894f7609c0bc6809808a96852c` passed with no failures or
+observations. The evidence and state-machine explanation are preserved in the
+[V10 exact-gate before/after report](artifacts/voice_run_v10_gate_branch_before_after_2026-10-08.md).
 
 The active synthetic clinic profile is **2care Clinic**, located in
 **Koramangala, Bengaluru**. Persisted fixtures retain the legacy internal
@@ -739,8 +745,8 @@ Evaluate a captured voice JSONL log with the deterministic transcript quality
 gate:
 
 ```text
-py -3.11 -m clinic_agent --evaluate-voice-log --voice-log data/voice-v05.jsonl
-py -3.11 -m clinic_agent --evaluate-voice-log --evaluation-format json --voice-log data/voice-v05.jsonl
+py -3.11 -m clinic_agent --evaluate-voice-log --voice-log data/voice-demo.jsonl
+py -3.11 -m clinic_agent --evaluate-voice-log --evaluation-format json --voice-log data/voice-demo.jsonl
 ```
 
 This command exits nonzero for hard failures such as a confirmation loop,
@@ -780,4 +786,4 @@ The broader [start-to-end quality report](artifacts/e2e_quality_report_2026-10-0
 - Define the exact urgent-symptom handoff language and destination for the simulated clinic.
 - Define the exact post-cancellation handoff payload and simulated front-desk service-level expectation.
 
-See [Agent Constitution](docs/AGENT_CONSTITUTION.md) for the provisional governing principles, [Uncertainty Matrix](docs/UNCERTAINTY_MATRIX.md) for the evidence and workstream map, [Agent Control Plane](docs/AGENT_CONTROL_PLANE.md) for the instruction/tool/state design, [Agent Runtime Design](docs/AGENT_RUNTIME_DESIGN.md) for the executable turn loop, [Implementation Plan](docs/IMPLEMENTATION_PLAN.md) for the build sequence, and [Mission Plan](docs/MISSION_PLAN.md) for the current working state. Detailed workstream records cover the [evaluation harness](docs/workstreams/EVALUATION_HARNESS.md), [call mechanics](docs/workstreams/CALL_MECHANICS.md), [voice-stack selection](docs/workstreams/VOICE_STACK_SELECTION.md), and [voice cost/value analysis](docs/workstreams/VOICE_COST_VALUE_ANALYSIS.md).
+See [Agent Constitution](docs/AGENT_CONSTITUTION.md) for the submission governing principles, [Uncertainty Matrix](docs/UNCERTAINTY_MATRIX.md) for the preserved evidence and workstream map, [Agent Control Plane](docs/AGENT_CONTROL_PLANE.md) for the instruction/tool/state design, [Agent Runtime Design](docs/AGENT_RUNTIME_DESIGN.md) for the executable turn loop, [Implementation Plan](docs/IMPLEMENTATION_PLAN.md) for the build sequence, and [Mission Plan](docs/MISSION_PLAN.md) for the current submission state. Detailed workstream records cover the [evaluation harness](docs/workstreams/EVALUATION_HARNESS.md), [call mechanics](docs/workstreams/CALL_MECHANICS.md), [voice-stack selection](docs/workstreams/VOICE_STACK_SELECTION.md), and [voice cost/value analysis](docs/workstreams/VOICE_COST_VALUE_ANALYSIS.md).

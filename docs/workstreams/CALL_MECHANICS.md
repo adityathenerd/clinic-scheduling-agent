@@ -1,7 +1,11 @@
 # Call Mechanics
 
-Status: GPT-Live/Twilio contract committed; executable async core updated  
-Last updated: 2026-10-05
+Status: Implemented; retained as the call-mechanics decision record
+Last updated: 2026-10-08
+
+The direct Twilio/OpenAI path, per-call actor lifecycle, interruption handling,
+bounded workers, and structured event logging are implemented and covered by the
+current repository test suite. Historical recommendations below are preserved.
 
 Implementation constraint: Python 3.11+ only. Call actors, adapters, simulations, and tests must not introduce a second application runtime. On the current Windows host, use the `py` launcher.
 

@@ -85,6 +85,20 @@ class AudioChunk:
 
 
 @dataclass(frozen=True, slots=True)
+class SpeechClip:
+    """Application-rendered PCMU audio ready for an 8 kHz telephony stream."""
+
+    payload: bytes
+    duration_ms: int
+
+    def __post_init__(self) -> None:
+        if not self.payload:
+            raise ValueError("speech clip payload is required")
+        if self.duration_ms <= 0:
+            raise ValueError("speech clip duration must be positive")
+
+
+@dataclass(frozen=True, slots=True)
 class VoiceSessionConfig:
     instructions: str
     backend_instructions: str | None = None

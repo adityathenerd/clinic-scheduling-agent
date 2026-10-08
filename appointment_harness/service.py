@@ -568,10 +568,26 @@ class AppointmentHarness:
             ):
                 return self._result(command.appointment_id, AppointmentMutationOutcome.CONFLICT)
 
+            previous_replacement = None
             if appointment.pending_replacement_slot_id is not None:
-                return self._result(
-                    command.appointment_id, AppointmentMutationOutcome.CONFLICT
+                previous_replacement = self.store.slots.get(
+                    appointment.pending_replacement_slot_id
                 )
+                # Replacing a pending clinic-review request is safe only while
+                # the appointment and its prior hold still form one consistent
+                # authoritative state.  The appointment version above protects
+                # against concurrent clinic approval or another patient change.
+                if (
+                    previous_replacement is None
+                    or previous_replacement.status is not SlotStatus.HELD
+                    or previous_replacement.slot_id == replacement.slot_id
+                ):
+                    return self._result(
+                        command.appointment_id, AppointmentMutationOutcome.CONFLICT
+                    )
+            if previous_replacement is not None:
+                previous_replacement.status = SlotStatus.AVAILABLE
+                previous_replacement.version += 1
             replacement.status = SlotStatus.HELD
             replacement.version += 1
             self.store.reschedule_sequence += 1
@@ -591,6 +607,18 @@ class AppointmentHarness:
             self._audit_mutation(
                 "appointment.reschedule_proposed", appointment, command.idempotency_key
             )
+            if previous_replacement is not None:
+                self._audit(
+                    "appointment.pending_reschedule_replaced",
+                    actor="appointment_harness",
+                    correlation_id=command.idempotency_key,
+                    payload={
+                        "appointment_id": appointment.appointment_id,
+                        "released_slot_id": previous_replacement.slot_id,
+                        "replacement_slot_id": replacement.slot_id,
+                        "version": appointment.version,
+                    },
+                )
             self._raise_after_commit_fault(operation)
             return result
 

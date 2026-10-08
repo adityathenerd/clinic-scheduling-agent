@@ -14,12 +14,19 @@ from clinic_agent.call_mechanics import (
     OperationKind,
     SessionEvent,
     SessionState,
+    SpeechClip,
     ToolIntent,
     ToolResult,
     ToolStatus,
 )
 
-from .fakes import ExplodingSink, FakeControlPlane, FakeTelephony, FakeVoice
+from .fakes import (
+    ExplodingSink,
+    FakeControlPlane,
+    FakeSpeechRenderer,
+    FakeTelephony,
+    FakeVoice,
+)
 
 
 class ActorTests(unittest.IsolatedAsyncioTestCase):
@@ -35,6 +42,8 @@ class ActorTests(unittest.IsolatedAsyncioTestCase):
         fallback: str | None = "front-desk",
         pool: AsyncWorkerPool | None = None,
         turn_completion_delay: float = 0.75,
+        speech_renderer: FakeSpeechRenderer | None = None,
+        application_playback_slack: float = 5.0,
     ) -> tuple[CallSessionActor, FakeTelephony, FakeVoice, FakeControlPlane, object]:
         telephony = FakeTelephony()
         voice = voice or FakeVoice()
@@ -48,6 +57,8 @@ class ActorTests(unittest.IsolatedAsyncioTestCase):
             sink,
             pool or AsyncWorkerPool(4),
             turn_completion_delay=turn_completion_delay,
+            speech_renderer=speech_renderer,
+            application_playback_slack=application_playback_slack,
         )
         return actor, telephony, voice, control, sink
 
@@ -156,7 +167,160 @@ class ActorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("caller.turn", event_types)
         await actor.close()
 
-    async def test_application_gate_cancels_delegation_before_classification_finishes(self) -> None:
+    async def test_application_owned_exact_speech_completes_only_after_twilio_mark(self) -> None:
+        control = FakeControlPlane(
+            completed_turn_directive="say_exactly: Identity accepted.",
+            application_owns_completed_turn=True,
+        )
+        renderer = FakeSpeechRenderer(clip=SpeechClip(b"\xff" * 1600, 200))
+        pool = AsyncWorkerPool(4)
+        actor, telephony, voice, _, sink = self.build_actor(
+            control=control,
+            pool=pool,
+            turn_completion_delay=0,
+            speech_renderer=renderer,
+        )
+        await actor.start()
+        await actor.dispatch(SessionEvent("caller.speech_started"))
+        await actor.dispatch(
+            SessionEvent("voice.input_transcript.delta", {"delta": "Yes, speaking"})
+        )
+        await actor.dispatch(SessionEvent("caller.speech_stopped"))
+        for _ in range(100):
+            if telephony.sent_audio:
+                break
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(["Identity accepted."], renderer.texts)
+        self.assertEqual([], voice.instructions)
+        self.assertEqual(1, len(voice.thinking))
+        self.assertIn("Identity accepted.", voice.thinking[0])
+        self.assertEqual(2, len(telephony.sent_audio))
+        self.assertFalse(
+            any(
+                event["event_type"] == "assistant.application_audio_completed"
+                for event in sink.events  # type: ignore[attr-defined]
+            )
+        )
+
+        await actor.dispatch(
+            SessionEvent(
+                "playback.marked",
+                {"item_id": "application-speech-1", "audio_end_ms": 200},
+            )
+        )
+        event_types = [event["event_type"] for event in sink.events]  # type: ignore[attr-defined]
+        self.assertIn("assistant.application_audio_completed", event_types)
+        completed_turn = next(
+            event
+            for event in sink.events  # type: ignore[attr-defined]
+            if event["event_type"] == "assistant.turn"
+            and event.get("reason") == "application_playback_completed"
+        )
+        self.assertEqual("[REDACTED]", completed_turn["transcript"])
+        self.assertEqual(len("Identity accepted."), completed_turn["transcript_characters"])
+
+        stale = AudioChunk(b"stale", 50, 20)
+        await actor.dispatch(
+            SessionEvent(
+                "voice.audio",
+                {"chunk": stale, "item_id": "gpt-live-output", "audio_end_ms": 20},
+            )
+        )
+        self.assertEqual(2, len(telephony.sent_audio))
+        control._application_owns_completed_turn = False  # identity gate has completed
+        await actor.dispatch(SessionEvent("caller.speech_started"))
+        natural = AudioChunk(b"natural", 51, 40)
+        await actor.dispatch(
+            SessionEvent(
+                "voice.audio",
+                {"chunk": natural, "item_id": "gpt-live-output", "audio_end_ms": 40},
+            )
+        )
+        self.assertEqual(natural, telephony.sent_audio[-1])
+        self.assertIn(
+            "control.conversation_reopened",
+            [event["event_type"] for event in sink.events],  # type: ignore[attr-defined]
+        )
+        await actor.close()
+
+    async def test_caller_barge_in_cancels_application_owned_playback(self) -> None:
+        renderer = FakeSpeechRenderer(clip=SpeechClip(b"\xff" * 1600, 200))
+        control = FakeControlPlane(
+            completed_turn_directive="say_exactly: Please listen.",
+            application_owns_completed_turn=True,
+        )
+        actor, telephony, _, _, sink = self.build_actor(
+            control=control,
+            turn_completion_delay=0,
+            speech_renderer=renderer,
+        )
+        await actor.start()
+        await actor.dispatch(SessionEvent("caller.speech_started"))
+        await actor.dispatch(SessionEvent("caller.speech_stopped"))
+        for _ in range(100):
+            if telephony.sent_audio:
+                break
+            await asyncio.sleep(0.01)
+        clears_before = telephony.clear_count
+
+        await actor.dispatch(SessionEvent("caller.speech_started"))
+
+        self.assertGreater(telephony.clear_count, clears_before)
+        self.assertIn(
+            "assistant.application_audio_interrupted",
+            [event["event_type"] for event in sink.events],  # type: ignore[attr-defined]
+        )
+        await actor.close()
+
+    async def test_application_speech_render_failure_fails_closed(self) -> None:
+        renderer = FakeSpeechRenderer(error=TimeoutError("synthetic TTS timeout"))
+        control = FakeControlPlane(
+            completed_turn_directive="say_exactly: Identity accepted.",
+            application_owns_completed_turn=True,
+        )
+        actor, telephony, _, _, sink = self.build_actor(
+            control=control,
+            turn_completion_delay=0,
+            speech_renderer=renderer,
+        )
+        await actor.start()
+        await actor.dispatch(SessionEvent("caller.speech_started"))
+        await actor.dispatch(SessionEvent("caller.speech_stopped"))
+        await asyncio.wait_for(actor.done.wait(), timeout=1)
+
+        self.assertEqual(SessionState.FAILED, actor.state)
+        self.assertEqual(["front-desk"], telephony.transfers)
+        self.assertIn(
+            "assistant.application_audio_render_failed",
+            [event["event_type"] for event in sink.events],  # type: ignore[attr-defined]
+        )
+
+    async def test_missing_final_playback_mark_fails_closed(self) -> None:
+        renderer = FakeSpeechRenderer(clip=SpeechClip(b"\xff" * 8, 1))
+        control = FakeControlPlane(
+            completed_turn_directive="say_exactly: Identity accepted.",
+            application_owns_completed_turn=True,
+        )
+        actor, telephony, _, _, sink = self.build_actor(
+            control=control,
+            turn_completion_delay=0,
+            speech_renderer=renderer,
+            application_playback_slack=0.01,
+        )
+        await actor.start()
+        await actor.dispatch(SessionEvent("caller.speech_started"))
+        await actor.dispatch(SessionEvent("caller.speech_stopped"))
+        await asyncio.wait_for(actor.done.wait(), timeout=1)
+
+        self.assertEqual(SessionState.FAILED, actor.state)
+        self.assertEqual(["front-desk"], telephony.transfers)
+        self.assertIn(
+            "assistant.application_audio_timeout",
+            [event["event_type"] for event in sink.events],  # type: ignore[attr-defined]
+        )
+
+    async def test_application_gate_quarantines_delegation_until_classification_finishes(self) -> None:
         control = FakeControlPlane(
             completed_turn_directive="say_exactly: Identity accepted.",
             application_owns_completed_turn=True,
@@ -178,9 +342,74 @@ class ActorTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        self.assertIn(("gate-race", "application_gate_pending"), voice.cancelled_delegations)
+        self.assertEqual([], voice.cancelled_delegations)
         event_types = [event["event_type"] for event in sink.events]  # type: ignore[attr-defined]
-        self.assertIn(NormalizedEventKind.DELEGATION_STALE.value, event_types)
+        self.assertIn("delegation.quarantined", event_types)
+        await actor.close()
+
+    async def test_accepted_gated_faq_releases_one_quarantined_tool_and_tracks_liveness(self) -> None:
+        class GateThenActive(FakeControlPlane):
+            async def complete_patient_turn(self, *, turn_epoch=None):
+                self.completed_turn_count += 1
+                self.completed_turn_epochs.append(turn_epoch)
+                self._application_owns_completed_turn = False
+                return (
+                    "Application event: the caller stated another supported clinic "
+                    "information request. Handle the full request now."
+                )
+
+        control = GateThenActive(application_owns_completed_turn=True)
+        pool = AsyncWorkerPool(4)
+        actor, _, voice, _, sink = self.build_actor(
+            control=control,
+            pool=pool,
+            turn_completion_delay=0.05,
+        )
+        await actor.start()
+        await actor.dispatch(SessionEvent("caller.speech_started"))
+        await actor.dispatch(
+            SessionEvent(
+                "voice.input_transcript.delta",
+                {"delta": "Can I get prescribed medicines at the clinic pharmacy?"},
+            )
+        )
+        await actor.dispatch(SessionEvent("caller.speech_stopped"))
+        await actor.dispatch(
+            SessionEvent(
+                NormalizedEventKind.DELEGATION_CREATED.value,
+                {"delegation_id": "faq-during-gate"},
+            )
+        )
+        accepted = await actor.dispatch(
+            SessionEvent(
+                NormalizedEventKind.BACKEND_TOOL_REQUESTED.value,
+                {
+                    "intent": ToolIntent(
+                        "faq-once",
+                        "search_clinic_faqs",
+                        OperationKind.READ,
+                        {"query": "clinic pharmacy medicines"},
+                        delegation_id="faq-during-gate",
+                    )
+                },
+            )
+        )
+        self.assertTrue(accepted)
+        self.assertEqual([], control.tool_calls)
+
+        for _ in range(100):
+            if control.tool_calls:
+                break
+            await asyncio.sleep(0.005)
+        await pool.wait_idle()
+
+        self.assertEqual(["faq-once"], [intent.operation_id for intent in control.tool_calls])
+        self.assertEqual([], voice.cancelled_delegations)
+        event_types = [event["event_type"] for event in sink.events]  # type: ignore[attr-defined]
+        self.assertIn("control.normal_turn_adopted_after_gate", event_types)
+        self.assertIn("delegation.released", event_types)
+        self.assertIn("control.normal_turn_progress", event_types)
+        self.assertNotIn("control.normal_turn_liveness_failed", event_types)
         await actor.close()
 
     async def test_application_gate_suppresses_stale_audio_until_directive_is_ready(self) -> None:

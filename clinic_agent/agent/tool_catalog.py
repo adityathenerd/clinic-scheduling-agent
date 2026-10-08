@@ -89,8 +89,10 @@ INTERPRET_FOLLOW_UP_DECISION_TOOL = _function_tool(
     (
         "Classify only the caller's continuation intent in the supplied context. "
         "accepted means yes to an explicit offer without a stated task; declined "
-        "means no or clearly closing the call; new_request means the caller clearly "
-        "states another scheduling task; unclear means none of those."
+        "means no or clearly closing the call with no further request; new_request "
+        "means the caller clearly states another scheduling, appointment-information, "
+        "or public clinic-information task. A substantive request later in the same "
+        "turn overrides an earlier no or closing phrase; unclear means none of those."
     ),
     {
         "decision": {

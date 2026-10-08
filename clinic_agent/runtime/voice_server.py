@@ -27,6 +27,7 @@ from clinic_agent.call_mechanics import (
 from clinic_agent.call_mechanics.actor import SessionClosedError
 from clinic_agent.control_plane.state_machine import ConversationStateMachine
 from clinic_agent.providers.openai_live import GPTLiveVoiceEngine
+from clinic_agent.providers.openai_tts import OpenAISpeechRenderer
 from clinic_agent.providers.twilio import TwilioMediaSession
 from clinic_agent.runtime.config import VoiceRuntimeSettings
 from clinic_agent.runtime.voice_app import create_voice_app
@@ -90,6 +91,7 @@ def create_configured_voice_app(
     event_sink = CompositeEventSink(memory_sink, file_sink)
     openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
     identity_classifier = ResponsesIdentityTurnClassifier(openai_client)
+    speech_renderer = OpenAISpeechRenderer(openai_client)
 
     async def make_media_session(websocket: Any) -> TwilioMediaSession:
         return await TwilioMediaSession.create(websocket)
@@ -133,6 +135,7 @@ def create_configured_voice_app(
             worker_pool,
             mailbox_capacity=128,
             voice_connect_retries=1,
+            speech_renderer=speech_renderer,
         )
         return actor
 

@@ -201,9 +201,10 @@ def build_live_prompt(context: PromptContext) -> str:
           no prerequisites exist, or read internal IDs aloud.
         - When a fresh availability result has no slots, promptly say that no match
           was found for the requested window and ask for another day or time.
-        - After a completed task, do not assume the caller wants another task. Ask
-          whether they want further scheduling help and wait for the application's
-          semantic follow-up decision before delegating or using appointment tools.
+        - After a completed task, ask whether the caller wants further scheduling or
+          clinic-information help and wait for the application's semantic follow-up
+          decision before delegating. If the caller states a substantive request in
+          the same answer as closing language, preserve and handle that request.
         """
     ).strip()
 
@@ -238,9 +239,11 @@ def build_backend_prompt(context: PromptContext) -> str:
         2. Check whether identity and authority permit the next disclosure or action.
         3. Determine whether intent is book, reschedule, cancel, administrative, or unclear.
         4. For edit or delete, identify the exact existing appointment and version.
-        5. Resolve administrative eligibility and prerequisites.
-        6. For create or edit, gather enough preferences for a bounded search.
-        7. Search fresh availability.
+        5. For create or edit, gather enough preferences for a bounded search.
+        6. Search fresh availability as soon as the appointment type and date
+           window are known. Do not delay an availability answer for eligibility.
+        7. Resolve administrative eligibility and prerequisites before preparing
+           a mutation proposal.
         8. Prepare one exact proposal.
         9. Wait for application-authorized confirmation.
         10. Request only the permitted mutation.
@@ -294,6 +297,17 @@ def build_backend_prompt(context: PromptContext) -> str:
         until approval. Clinic approval atomically releases the original slot, books
         the replacement, and initiates an outbound confirmation call. A failed or
         rejected replacement must preserve the original appointment.
+
+        Availability invariant:
+        - Every question asking whether a date or time is available requires a
+          search_slots call for that requested window in the same delegation.
+        - Reuse appointment_type_id, provider_id, and location_id returned by the
+          authoritative appointment read; never derive canonical IDs from display text.
+        - After an appointment read, call search_slots directly once the requested
+          date window is clear. Do not call check_eligibility merely to list options.
+        - Never say availability could not be retrieved unless search_slots actually
+          returned a failure or rejection. Absence of a search result means the work
+          is incomplete, not that availability is unavailable.
 
         Delete/cancel:
         Retrieve the exact appointment, include supplied cancellation consequences,

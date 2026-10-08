@@ -375,6 +375,54 @@ class EditTests(unittest.TestCase):
         self.assertEqual(first, repeated)
         self.assertEqual(1, len([e for e in harness.store.audit_log if e.event_type == "appointment.reschedule_proposed"]))
 
+    def test_confirmed_new_reschedule_atomically_replaces_prior_held_request(self) -> None:
+        harness = make_harness()
+        authorize(harness)
+        first = harness.edit_appointment(self._command(harness))
+        self.assertEqual(AppointmentMutationOutcome.PROPOSED, first.outcome)
+
+        replacement_id = "slot-mehta-20261012-1130"
+        snapshot = harness.search_slots(
+            session_id=SESSION,
+            patient_id=PATIENT,
+            appointment_type_id="dermatology-followup",
+            provider_id="provider-mehta",
+            starts_after=datetime.fromisoformat("2026-10-12T00:00:00+05:30"),
+            starts_before=datetime.fromisoformat("2026-10-13T00:00:00+05:30"),
+        )
+        confirmation(
+            harness,
+            operation="edit_appointment",
+            proposal_id="proposal-replace",
+            token="token-replace",
+            appointment_id="appointment-existing",
+            version=2,
+            slot_id=replacement_id,
+        )
+        result = harness.edit_appointment(EditAppointmentCommand(
+            session_id=SESSION,
+            patient_id=PATIENT,
+            appointment_id="appointment-existing",
+            expected_appointment_version=2,
+            replacement_slot_id=replacement_id,
+            availability_snapshot_id=snapshot.snapshot_id,
+            proposal_id="proposal-replace",
+            confirmation_token="token-replace",
+            idempotency_key="edit-replace-002",
+        ))
+
+        self.assertEqual(AppointmentMutationOutcome.PROPOSED, result.outcome)
+        appointment = harness.store.appointments["appointment-existing"]
+        self.assertEqual(replacement_id, appointment.pending_replacement_slot_id)
+        self.assertEqual(3, appointment.version)
+        self.assertIs(harness.store.slots["slot-1630"].status, SlotStatus.AVAILABLE)
+        self.assertIs(harness.store.slots[replacement_id].status, SlotStatus.HELD)
+        self.assertEqual(2, harness.store.reschedule_sequence)
+        self.assertEqual(1, len([
+            e for e in harness.store.audit_log
+            if e.event_type == "appointment.pending_reschedule_replaced"
+        ]))
+
     def test_slot_race_preserves_original_appointment(self) -> None:
         harness = make_harness(
             Fault("edit_appointment", FaultPoint.BEFORE_COMMIT, FaultKind.SLOT_RACE)

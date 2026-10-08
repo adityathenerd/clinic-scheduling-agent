@@ -168,6 +168,35 @@ class NormalTurnWatchdogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], telephony.sent_audio)
         self.assertIn('control.normal_turn_liveness_failed', [e['event_type'] for e in sink.events])
 
+    async def test_trailing_exact_reply_output_after_barge_in_cannot_claim_new_turn(self):
+        actor, telephony, voice, _, sink, _ = await self.build()
+        actor._normal_turn_progress_timeout = 0.2
+        actor._exact_reply_takeover_active = True
+        actor._exact_reply_takeover_epoch = 0
+        await actor.dispatch(SessionEvent('caller.speech_started'))
+        await actor.dispatch(SessionEvent('voice.input_transcript.delta',
+                                         {'delta': 'When was my appointment?'}))
+        await actor.dispatch(SessionEvent('caller.speech_stopped'))
+
+        # These are late frames from the interrupted identity-confirmation reply,
+        # not an answer to the appointment question.
+        await actor.dispatch(SessionEvent('voice.audio', {'chunk': AudioChunk(b'late identity', 101, 20),
+                              'item_id': 'gpt-live-output', 'audio_end_ms': 20}))
+        await actor.dispatch(SessionEvent('voice.output_transcript.delta',
+                                         {'delta': 'Thank you for confirming.',
+                                          'audio_sequence': 101}))
+
+        await wait_for(lambda: any('Resume normal conversation' in item for item in voice.instructions))
+        self.assertEqual([], telephony.sent_audio)
+        self.assertFalse(any(e['event_type'] == 'control.normal_turn_progress'
+                             and e.get('progress_kind') in {'assistant_audio', 'assistant_transcript'}
+                             for e in sink.events))
+        suppressed = [e for e in sink.events if e['event_type'] in {
+            'assistant.audio_suppressed', 'assistant.transcript_suppressed'}]
+        self.assertEqual(2, len(suppressed))
+        self.assertTrue(all(e.get('reason') == 'stale_exact_reply_after_barge_in'
+                            for e in suppressed))
+
     async def test_progress_before_completion_prevents_resume_and_duplicate_backend_work(self):
         actor, _, voice, _, sink, pool = await self.build()
         actor._exact_reply_takeover_active = True
@@ -347,6 +376,19 @@ class NormalTurnEvaluatorControls(unittest.TestCase):
         rows.insert(3, {'event_type': 'control.normal_turn_progress', 'turn_epoch': 1,
                         'occurred_at': '2026-10-07T14:26:02+00:00'})
         self.assertIn('normal_active_turn_no_progress', {i.code for i in evaluate_voice_events(rows).hard_failures})
+
+    def test_unattributed_audio_after_boundary_cannot_mask_stuck_turn(self):
+        rows = self.rows()
+        rows.insert(1, {'event_type': 'caller.turn_boundary_detected', 'turn_epoch': 2,
+                        'occurred_at': '2026-10-07T14:26:00.500000+00:00'})
+        rows.insert(2, {'event_type': 'control.normal_turn_progress', 'turn_epoch': 2,
+                        'activity_token': 'normal-turn-2-2', 'progress_kind': 'assistant_audio',
+                        'occurred_at': '2026-10-07T14:26:00.750000+00:00'})
+        rows.insert(5, {'event_type': 'control.normal_turn_completed', 'turn_epoch': 2,
+                        'activity_token': 'normal-turn-2-2', 'progress_seen': True,
+                        'occurred_at': '2026-10-07T14:26:01.100000+00:00'})
+        result = evaluate_voice_events(rows)
+        self.assertIn('normal_active_turn_no_progress', {i.code for i in result.hard_failures})
 
     def test_progress_after_deadline_is_still_a_liveness_failure(self):
         result = evaluate_voice_events(self.rows((20, 'delegation.created')))

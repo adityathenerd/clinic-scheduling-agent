@@ -14,11 +14,18 @@ from .models import (
     OperationKind,
     SessionEvent,
     SessionState,
+    SpeechClip,
     ToolIntent,
     ToolResult,
     ToolStatus,
 )
-from .protocols import AgentControlPlane, EventSink, TelephonyAdapter, VoiceEngine
+from .protocols import (
+    AgentControlPlane,
+    EventSink,
+    SpeechRenderer,
+    TelephonyAdapter,
+    VoiceEngine,
+)
 from .queue import BoundedAsyncQueue, QueueClosedError
 from .worker_pool import AsyncWorkerPool
 
@@ -37,6 +44,7 @@ class _NormalTurnActivity:
     progressed: bool = False
     failed: bool = False
     resumed: bool = False
+    resume_reason: str | None = None
 
 
 class SessionClosedError(RuntimeError):
@@ -66,6 +74,9 @@ class CallSessionActor:
         voice_connect_retries: int = 1,
         turn_completion_delay: float = 0.75,
         normal_turn_progress_timeout: float = NORMAL_TURN_PROGRESS_TIMEOUT,
+        speech_renderer: SpeechRenderer | None = None,
+        application_audio_chunk_bytes: int = 800,
+        application_playback_slack: float = 5.0,
     ) -> None:
         self.descriptor = descriptor
         self.telephony = telephony
@@ -73,6 +84,7 @@ class CallSessionActor:
         self.control_plane = control_plane
         self.event_sink = event_sink
         self.worker_pool = worker_pool
+        self.speech_renderer = speech_renderer
         self.state = SessionState.NEW
         self._mailbox: BoundedAsyncQueue[_Envelope] = BoundedAsyncQueue(mailbox_capacity)
         self._voice_connect_retries = voice_connect_retries
@@ -82,6 +94,12 @@ class CallSessionActor:
         if normal_turn_progress_timeout <= 0:
             raise ValueError("normal turn progress timeout must be positive")
         self._normal_turn_progress_timeout = normal_turn_progress_timeout
+        if application_audio_chunk_bytes <= 0:
+            raise ValueError("application audio chunk size must be positive")
+        if application_playback_slack <= 0:
+            raise ValueError("application playback slack must be positive")
+        self._application_audio_chunk_bytes = application_audio_chunk_bytes
+        self._application_playback_slack = application_playback_slack
         self._loop_task: asyncio.Task[None] | None = None
         self._start_lock = asyncio.Lock()
         self._done = asyncio.Event()
@@ -115,9 +133,21 @@ class CallSessionActor:
         self._caller_speaking = False
         self._progress_turn_epoch: int | None = None
         self._normal_turn_activity: _NormalTurnActivity | None = None
+        self._quarantined_tool_intents: list[ToolIntent] = []
+        self._quarantined_delegation_id: str | None = None
         self._normal_turn_watchdog_task: asyncio.Task[None] | None = None
         self._activity_sequence = 0
         self._exact_reply_takeover_active = False
+        self._exact_reply_takeover_epoch: int | None = None
+        self._application_speech_counter = 0
+        self._application_speech_token: str | None = None
+        self._application_speech_text: str | None = None
+        self._application_speech_turn_epoch: int | None = None
+        self._application_speech_item_id: str | None = None
+        self._application_speech_final_ms: int | None = None
+        self._application_speech_task: asyncio.Task[SpeechClip] | None = None
+        self._application_playback_watchdog: asyncio.Task[None] | None = None
+        self._application_speech_waiting_for_caller = False
 
     @property
     def pending_operation_count(self) -> int:
@@ -181,9 +211,13 @@ class CallSessionActor:
                 await self._send_voice_audio(event)
             return None
         if event.kind == "playback.marked":
-            self._update_playback_cursor(event)
-            return None
+            return await self._update_playback_cursor(event)
         if event.kind == "caller.speech_started":
+            if (
+                self._application_speech_token is not None
+                or self._application_speech_waiting_for_caller
+            ):
+                await self._release_or_interrupt_application_speech()
             self._cancel_normal_turn_watchdog()
             self._caller_turn_epoch += 1
             self._caller_speaking = True
@@ -214,7 +248,7 @@ class CallSessionActor:
                 await self._invalidate_active_delegation("application_gate_pending")
                 progress = self.control_plane.application_gate_progress_message
                 if progress and self._progress_turn_epoch != self._caller_turn_epoch:
-                    await self._append_control_directive(f"say_exactly: {progress}")
+                    await self._append_application_gate_progress(progress)
                     self._progress_turn_epoch = self._caller_turn_epoch
                     self._allow_application_gate_progress_audio = True
                     self._pending_gate_progress_audio = True
@@ -245,6 +279,7 @@ class CallSessionActor:
             return await self._start_turn_completion_worker(self._caller_turn_epoch)
         if event.kind == "caller.turn_completion_processed":
             turn_epoch = int(event.data.get("turn_epoch", -1))
+            gate_owned_turn = self._application_gate_epoch == turn_epoch
             try:
                 if turn_epoch == self._caller_turn_epoch:
                     transcript = await self._flush_caller_transcript("turn_completed", turn_epoch)
@@ -269,23 +304,42 @@ class CallSessionActor:
                         await self._fail_normal_turn("completed_turn_failed")
                     return None
                 directive = event.data.get("directive")
+                returned_to_normal = (
+                    gate_owned_turn
+                    and self.control_plane.normal_conversation_active
+                    and bool(transcript)
+                )
+                if returned_to_normal:
+                    await self._adopt_normal_turn_after_gate(turn_epoch)
+                    # Once classification has accepted this as normal work, the
+                    # gate must be released before any quarantined response or
+                    # fresh instruction can produce caller-visible output.
+                    self._clear_application_gate(turn_epoch)
                 if directive:
-                    delivery_mode = await self._append_control_directive(str(directive))
+                    plain_directive = not str(directive).casefold().startswith("say_exactly:")
+                    if returned_to_normal and plain_directive and self._has_quarantined_work():
+                        delivery_mode = await self._release_quarantined_work()
+                    else:
+                        if gate_owned_turn and not returned_to_normal:
+                            await self._discard_quarantined_work("application_directive")
+                        delivery_mode = await self._append_control_directive(str(directive))
                     await self._record(
                         "control.completed_turn_directive",
                         turn_epoch=turn_epoch,
                         directive_characters=len(str(directive)),
                         delivery_mode=delivery_mode,
                     )
-                    await self._mark_normal_turn_progress("application_directive")
+                    if returned_to_normal:
+                        await self._finish_normal_turn(transcript)
+                    else:
+                        await self._mark_normal_turn_progress("application_directive")
                 elif self.control_plane.normal_conversation_active and transcript:
+                    if returned_to_normal:
+                        await self._release_quarantined_work()
                     await self._finish_normal_turn(transcript)
                 return None
             finally:
-                if self._application_gate_epoch == turn_epoch:
-                    self._application_gate_epoch = None
-                    self._allow_application_gate_progress_audio = False
-                    self._pending_gate_progress_audio = False
+                self._clear_application_gate(turn_epoch)
         if event.kind == "voice.input_transcript.delta":
             delta = str(event.data.get("delta", ""))
             if delta:
@@ -311,9 +365,11 @@ class CallSessionActor:
         if event.kind == "voice.output_transcript.delta":
             delta = str(event.data.get("delta", ""))
             transcript_sequence = event.data.get("audio_sequence")
+            unattributed_exact_output = self._is_unattributed_exact_reply_output()
             if (
                 self._output_takeover_pending
                 or self._output_takeover_operations
+                or unattributed_exact_output
                 or (
                     self._application_gate_epoch is not None
                     and not self._allow_application_gate_progress_audio
@@ -329,6 +385,11 @@ class CallSessionActor:
                     audio_sequence=transcript_sequence,
                     authorized_sequence=self._assistant_transcript_min_sequence,
                     transcript_characters=len(delta),
+                    reason=(
+                        "stale_exact_reply_after_barge_in"
+                        if unattributed_exact_output
+                        else "output_gate_pending"
+                    ),
                 )
                 return None
             if delta:
@@ -371,6 +432,16 @@ class CallSessionActor:
             return await self._start_tool_worker(event.data["intent"])
         if event.kind == "worker.completed":
             return await self._complete_tool_worker(event)
+        if event.kind == "application.speech_rendered":
+            return await self._handle_application_speech_rendered(event)
+        if event.kind == "application.speech_playback_timeout":
+            if event.data.get("token") == self._application_speech_token:
+                await self._record(
+                    "assistant.application_audio_timeout",
+                    turn_epoch=self._application_speech_turn_epoch,
+                )
+                await self._handle_voice_failure("application_speech_playback_timeout")
+            return None
         if event.kind == "telephony.stop":
             return await self._handle_stop(str(event.data.get("reason", "remote_stop")))
         if event.kind == "voice.error":
@@ -438,6 +509,7 @@ class CallSessionActor:
         if not isinstance(chunk, AudioChunk):
             raise TypeError("voice.audio requires an AudioChunk")
         sequence_cutoff = self._suppress_audio_before_sequence
+        unattributed_exact_output = self._is_unattributed_exact_reply_output()
         gate_blocks_audio = (
             self._output_takeover_pending
             or bool(self._output_takeover_operations)
@@ -446,17 +518,25 @@ class CallSessionActor:
                 and not self._allow_application_gate_progress_audio
             )
         )
-        if gate_blocks_audio or (
+        if gate_blocks_audio or unattributed_exact_output or (
             sequence_cutoff is not None and chunk.sequence < sequence_cutoff
         ):
             await self._record(
                 "assistant.audio_suppressed",
                 reason=(
-                    "application_gate_pending"
-                    if gate_blocks_audio
-                    else "pre_instruction_timeline"
+                    "stale_exact_reply_after_barge_in"
+                    if unattributed_exact_output
+                    else (
+                        "application_gate_pending"
+                        if gate_blocks_audio
+                        else "pre_instruction_timeline"
+                    )
                 ),
-                turn_epoch=self._application_gate_epoch,
+                turn_epoch=(
+                    self._normal_turn_activity.epoch
+                    if unattributed_exact_output and self._normal_turn_activity is not None
+                    else self._application_gate_epoch
+                ),
                 audio_bytes=len(chunk.payload),
                 audio_sequence=chunk.sequence,
                 authorized_sequence=sequence_cutoff,
@@ -512,11 +592,74 @@ class CallSessionActor:
         self._last_inbound_sequence = chunk.sequence
         await self.voice.push_audio(chunk)
 
-    def _update_playback_cursor(self, event: SessionEvent) -> None:
+    async def _update_playback_cursor(self, event: SessionEvent) -> None:
         item_id = str(event.data["item_id"])
         audio_end_ms = int(event.data["audio_end_ms"])
         if item_id == self._assistant_item_id:
             self._assistant_last_played_ms = max(self._assistant_last_played_ms, audio_end_ms)
+        if (
+            item_id == self._application_speech_item_id
+            and self._application_speech_final_ms is not None
+            and audio_end_ms >= self._application_speech_final_ms
+            and self._application_speech_token is not None
+        ):
+            text = self._application_speech_text or ""
+            turn_epoch = self._application_speech_turn_epoch
+            self._cancel_application_playback_watchdog()
+            self._application_speech_token = None
+            self._application_speech_item_id = None
+            self._application_speech_final_ms = None
+            self._application_speech_text = None
+            self._application_speech_turn_epoch = None
+            self._application_speech_waiting_for_caller = True
+            await self._record(
+                "assistant.application_audio_completed",
+                turn_epoch=turn_epoch,
+                played_ms=audio_end_ms,
+                transcript_characters=len(text),
+            )
+            await self._record(
+                "assistant.turn",
+                transcript=text,
+                transcript_characters=len(text),
+                reason="application_playback_completed",
+                turn_epoch=turn_epoch,
+            )
+
+    async def _release_or_interrupt_application_speech(self) -> None:
+        if self._application_speech_waiting_for_caller:
+            self._application_speech_waiting_for_caller = False
+            self._output_takeover_pending = False
+            self._assistant_item_id = None
+            self._assistant_last_played_ms = 0
+            await self._record(
+                "control.conversation_reopened",
+                turn_epoch=self._caller_turn_epoch + 1,
+                reason="caller_spoke_after_application_audio",
+            )
+            return
+        await self._cancel_application_speech("caller_barge_in")
+
+    async def _cancel_application_speech(self, reason: str) -> None:
+        token = self._application_speech_token
+        if token is None:
+            return
+        task = self._application_speech_task
+        if task is not None and not task.done():
+            task.cancel()
+        self._application_speech_task = None
+        self._cancel_application_playback_watchdog()
+        await self.telephony.clear_playback()
+        self._application_speech_token = None
+        self._application_speech_text = None
+        self._application_speech_turn_epoch = None
+        self._application_speech_item_id = None
+        self._application_speech_final_ms = None
+        self._application_speech_waiting_for_caller = False
+        self._output_takeover_pending = False
+        self._assistant_item_id = None
+        self._assistant_last_played_ms = 0
+        await self._record("assistant.application_audio_interrupted", reason=reason)
 
     async def _interrupt_assistant(self) -> None:
         if not self._assistant_item_id or not self._caller_connected:
@@ -545,7 +688,13 @@ class CallSessionActor:
         if self._normal_turn_activity is not None and self._normal_turn_activity.failed:
             await self._invalidate_active_delegation("normal_turn_liveness_failed")
         elif self._application_gate_epoch is not None:
-            await self._invalidate_active_delegation("application_gate_pending")
+            self._quarantined_delegation_id = delegation_id
+            await self._record(
+                "delegation.quarantined",
+                delegation_id=delegation_id,
+                turn_epoch=self._application_gate_epoch,
+                reason="application_gate_pending",
+            )
         else:
             await self._mark_normal_turn_progress("delegation_created")
 
@@ -562,7 +711,10 @@ class CallSessionActor:
             event.kind, delegation_id=delegation_id,
             turn_epoch=self._active_delegation_turn_epoch,
         )
-        if self._active_delegation_turn_epoch == self._caller_turn_epoch:
+        if (
+            self._application_gate_epoch is None
+            and self._active_delegation_turn_epoch == self._caller_turn_epoch
+        ):
             await self._mark_normal_turn_progress(event.kind)
         return True
 
@@ -581,6 +733,24 @@ class CallSessionActor:
         )
         self._active_delegation_id = None
         self._active_delegation_turn_epoch = None
+        if self._quarantined_delegation_id == delegation_id:
+            self._quarantined_delegation_id = None
+            self._quarantined_tool_intents = [
+                intent
+                for intent in self._quarantined_tool_intents
+                if intent.delegation_id != delegation_id
+            ]
+        activity = self._normal_turn_activity
+        if (
+            activity is not None
+            and activity.epoch == self._caller_turn_epoch
+            and activity.completed
+            and not activity.progressed
+            and not activity.failed
+            and not activity.resumed
+        ):
+            activity.resume_reason = "released_delegation_completed_without_progress"
+            self._schedule_normal_turn_resume(activity)
         return True
 
     async def _handle_delegation_cancelled(self, event: SessionEvent) -> None:
@@ -601,6 +771,13 @@ class CallSessionActor:
             return
         self._active_delegation_id = None
         self._active_delegation_turn_epoch = None
+        if self._quarantined_delegation_id == delegation_id:
+            self._quarantined_delegation_id = None
+            self._quarantined_tool_intents = [
+                intent
+                for intent in self._quarantined_tool_intents
+                if intent.delegation_id != delegation_id
+            ]
         self._stale_delegations.add(delegation_id)
         for operation in self._operations.values():
             intent: ToolIntent = operation["intent"]
@@ -638,6 +815,28 @@ class CallSessionActor:
                 if intent.delegation_id else self._caller_turn_epoch
             )
             intent = replace(intent, state_revision=origin_epoch)
+        if (
+            self._application_gate_epoch is not None
+            and intent.state_revision == self._application_gate_epoch
+        ):
+            if any(
+                pending.operation_id == intent.operation_id
+                for pending in self._quarantined_tool_intents
+            ):
+                await self._record(
+                    "tool.duplicate_ignored", operation_id=intent.operation_id
+                )
+                return False
+            self._quarantined_tool_intents.append(intent)
+            await self._record(
+                "tool.quarantined",
+                operation_id=intent.operation_id,
+                tool_name=intent.tool_name,
+                delegation_id=intent.delegation_id,
+                turn_epoch=intent.state_revision,
+                reason="application_gate_pending",
+            )
+            return True
         existing = self._operations.get(intent.operation_id)
         if existing is not None:
             await self._record("tool.duplicate_ignored", operation_id=intent.operation_id)
@@ -947,6 +1146,64 @@ class CallSessionActor:
         if task is not None and not task.done():
             task.cancel()
 
+    def _clear_application_gate(self, turn_epoch: int) -> None:
+        if self._application_gate_epoch != turn_epoch:
+            return
+        self._application_gate_epoch = None
+        self._allow_application_gate_progress_audio = False
+        self._pending_gate_progress_audio = False
+
+    async def _adopt_normal_turn_after_gate(self, turn_epoch: int) -> None:
+        activity = self._normal_turn_activity
+        if activity is not None and activity.epoch == turn_epoch:
+            return
+        self._activity_sequence += 1
+        self._normal_turn_activity = _NormalTurnActivity(
+            turn_epoch,
+            f"normal-turn-{turn_epoch}-{self._activity_sequence}",
+        )
+        await self._record(
+            "control.normal_turn_adopted_after_gate",
+            turn_epoch=turn_epoch,
+            activity_token=self._normal_turn_activity.token,
+        )
+
+    def _has_quarantined_work(self) -> bool:
+        return bool(
+            self._quarantined_delegation_id
+            or self._quarantined_tool_intents
+        )
+
+    async def _release_quarantined_work(self) -> str:
+        delegation_id = self._quarantined_delegation_id
+        intents = tuple(self._quarantined_tool_intents)
+        self._quarantined_delegation_id = None
+        self._quarantined_tool_intents.clear()
+        if delegation_id is not None or intents:
+            await self._record(
+                "delegation.released",
+                delegation_id=delegation_id,
+                turn_epoch=self._caller_turn_epoch,
+                tool_count=len(intents),
+                reason="application_gate_accepted_request",
+            )
+        for intent in intents:
+            await self._start_tool_worker(intent)
+        return (
+            "quarantined_tool_released"
+            if intents
+            else "quarantined_delegation_released"
+            if delegation_id is not None
+            else "no_quarantined_work"
+        )
+
+    async def _discard_quarantined_work(self, reason: str) -> None:
+        delegation_id = self._quarantined_delegation_id
+        self._quarantined_tool_intents.clear()
+        self._quarantined_delegation_id = None
+        if delegation_id is not None and self._active_delegation_id == delegation_id:
+            await self._invalidate_active_delegation(reason)
+
     async def _finish_normal_turn(self, transcript: str) -> None:
         activity = self._normal_turn_activity
         if activity is None or activity.epoch != self._caller_turn_epoch:
@@ -967,18 +1224,26 @@ class CallSessionActor:
             await self._mark_normal_turn_progress("in_flight_backend")
             return
         await self._start_normal_turn_watchdog(activity)
-        if self._exact_reply_takeover_active and not activity.resumed:
-            async def deliver_resume() -> None:
-                try:
-                    await self.dispatch(SessionEvent(
-                        "control.normal_turn_resume",
-                        {"turn_epoch": activity.epoch, "activity_token": activity.token},
-                    ))
-                except (SessionClosedError, QueueClosedError):
-                    return
-            # Let downstream progress already in the mailbox win before deciding
-            # whether a resume is necessary. This is never a tool/response retry.
-            asyncio.create_task(deliver_resume())
+        if (
+            (self._exact_reply_takeover_active or activity.resume_reason is not None)
+            and not activity.resumed
+            and self._active_delegation_id is None
+        ):
+            self._schedule_normal_turn_resume(activity)
+
+    def _schedule_normal_turn_resume(self, activity: _NormalTurnActivity) -> None:
+        async def deliver_resume() -> None:
+            try:
+                await self.dispatch(SessionEvent(
+                    "control.normal_turn_resume",
+                    {"turn_epoch": activity.epoch, "activity_token": activity.token},
+                ))
+            except (SessionClosedError, QueueClosedError):
+                return
+
+        # Let downstream progress already in the mailbox win before deciding
+        # whether a resume is necessary. This is never a tool/response retry.
+        asyncio.create_task(deliver_resume())
 
     async def _resume_normal_turn(self, event: SessionEvent) -> None:
         activity = self._normal_turn_activity
@@ -1000,7 +1265,10 @@ class CallSessionActor:
             # Earlier work is not progress for this turn, but don't replay it.
             # Keep this turn's watchdog armed so silence is still bounded.
             return
-        if self._exact_reply_takeover_active and not activity.resumed:
+        if (
+            (self._exact_reply_takeover_active or activity.resume_reason is not None)
+            and not activity.resumed
+        ):
             # instructions.append persists in the session. End the preceding
             # one-response restriction once, after a complete ordinary turn.
             # Do not replay the request if Live has already started work.
@@ -1008,9 +1276,8 @@ class CallSessionActor:
             self._output_takeover_pending = True
             try:
                 cutoff = await self.voice.append_instructions(
-                    "Authoritative application instruction: the preceding exact "
-                    "reply has been delivered and its one-response wording "
-                    "restriction has ended. Resume normal conversation for this "
+                    "Authoritative application instruction: any preceding "
+                    "application-owned gate has completed. Resume normal conversation for this "
                     "latest completed caller turn already in the conversation. "
                     "Respond naturally and delegate to "
                     "the guarded backend when tools are needed. Do not repeat "
@@ -1021,12 +1288,14 @@ class CallSessionActor:
                     self._suppress_audio_before_sequence = cutoff
                     self._assistant_transcript_min_sequence = cutoff
                 self._exact_reply_takeover_active = False
+                self._exact_reply_takeover_epoch = None
                 self._output_takeover_pending = False
                 await self._record(
                     "control.normal_turn_resumed",
                     turn_epoch=activity.epoch,
                     activity_token=activity.token,
                     delivery_mode="instructions",
+                    resume_reason=activity.resume_reason or "exact_reply_takeover",
                 )
             except Exception as exc:
                 await self._fail_normal_turn(
@@ -1034,14 +1303,32 @@ class CallSessionActor:
                 )
 
     def _normal_turn_has_inflight_work(self) -> bool:
-        return (
-            self._active_delegation_id is not None
-            and self._active_delegation_turn_epoch == self._caller_turn_epoch
-        ) or any(
+        return any(
             not operation["done"]
             and not operation.get("stale")
             and operation["intent"].state_revision == self._caller_turn_epoch
             for operation in self._operations.values()
+        )
+
+    def _is_unattributed_exact_reply_output(self) -> bool:
+        """Reject output that cannot belong to the new turn after barge-in.
+
+        GPT Live can deliver a final audio/transcript frame from an interrupted
+        exact application reply after the caller has already started and ended a
+        new ordinary turn.  Until that new turn has either entered the backend or
+        received the explicit normal-conversation resume, those frames belong to
+        the preceding reply.  They must neither reach the caller nor satisfy the
+        new turn's liveness contract.
+        """
+        activity = self._normal_turn_activity
+        return (
+            activity is not None
+            and activity.epoch == self._caller_turn_epoch
+            and self._exact_reply_takeover_active
+            and self._exact_reply_takeover_epoch is not None
+            and activity.epoch > self._exact_reply_takeover_epoch
+            and not activity.resumed
+            and not self._normal_turn_has_inflight_work()
         )
 
     async def _start_normal_turn_watchdog(self, activity: _NormalTurnActivity) -> None:
@@ -1160,7 +1447,178 @@ class CallSessionActor:
         )
         return transcript
 
+    async def _begin_application_speech(self, text: str) -> str:
+        renderer = self.speech_renderer
+        if renderer is None:
+            raise RuntimeError("application speech renderer is not configured")
+        if self._application_speech_token is not None:
+            await self._cancel_application_speech("superseded")
+        self._application_speech_counter += 1
+        token = f"speech-{self._application_speech_counter}"
+        turn_epoch = self._caller_turn_epoch
+        self._application_speech_token = token
+        self._application_speech_text = text
+        self._application_speech_turn_epoch = turn_epoch
+        self._application_speech_waiting_for_caller = False
+        self._output_takeover_pending = True
+        self._allow_application_gate_progress_audio = False
+        await self._invalidate_active_delegation("application_reply_owned")
+        await self.telephony.clear_playback()
+        await self.voice.cancel_response()
+        await self._flush_assistant_transcript("application_reply_boundary")
+        await self.voice.append_thinking(
+            "Application-owned assistant speech is being played directly to the "
+            "caller. Treat the following as the assistant's completed conversational "
+            "turn, do not repeat or paraphrase it, and remain silent until the caller "
+            f"speaks: {text}"
+        )
+
+        task = self.worker_pool.submit(lambda: renderer.render(text))
+        self._application_speech_task = task
+
+        def rendered(finished: asyncio.Task[SpeechClip]) -> None:
+            if finished.cancelled():
+                return
+            try:
+                clip = finished.result()
+                error: Exception | None = None
+            except Exception as exc:
+                clip = None
+                error = exc
+
+            async def deliver() -> None:
+                try:
+                    await self.dispatch(
+                        SessionEvent(
+                            "application.speech_rendered",
+                            {
+                                "token": token,
+                                "turn_epoch": turn_epoch,
+                                "clip": clip,
+                                "error": error,
+                            },
+                        )
+                    )
+                except (SessionClosedError, QueueClosedError):
+                    return
+
+            try:
+                asyncio.create_task(deliver())
+            except RuntimeError:
+                return
+
+        task.add_done_callback(rendered)
+        await self._record(
+            "assistant.application_audio_render_started",
+            turn_epoch=turn_epoch,
+            transcript_characters=len(text),
+        )
+        return "application_audio"
+
+    async def _append_application_gate_progress(self, text: str) -> None:
+        """Let Live acknowledge bounded background work, then keep the gate closed."""
+
+        self._output_takeover_pending = True
+        self._allow_application_gate_progress_audio = False
+        await self.telephony.clear_playback()
+        await self.voice.cancel_response()
+        await self._flush_assistant_transcript("application_progress_boundary")
+        cutoff = await self.voice.append_instructions(
+            "Immediately give the caller this brief progress update, with no extra "
+            "details, then remain silent while the application finishes: "
+            f"{text}"
+        )
+        if cutoff is not None:
+            self._suppress_audio_before_sequence = cutoff
+            self._assistant_transcript_min_sequence = cutoff
+        self._output_takeover_pending = False
+
+    async def _handle_application_speech_rendered(self, event: SessionEvent) -> None:
+        token = str(event.data.get("token", ""))
+        if token != self._application_speech_token or not self._caller_connected:
+            await self._record(
+                "assistant.application_audio_stale",
+                turn_epoch=event.data.get("turn_epoch"),
+            )
+            return
+        error = event.data.get("error")
+        clip = event.data.get("clip")
+        if error is not None or not isinstance(clip, SpeechClip):
+            await self._record(
+                "assistant.application_audio_render_failed",
+                turn_epoch=self._application_speech_turn_epoch,
+                error_class=type(error).__name__ if error is not None else "InvalidClip",
+            )
+            await self._handle_voice_failure("application_speech_render_failed")
+            return
+
+        item_id = f"application-{token}"
+        self._application_speech_item_id = item_id
+        self._application_speech_final_ms = clip.duration_ms
+        self._assistant_item_id = item_id
+        self._assistant_last_played_ms = 0
+        await self.telephony.clear_playback()
+        for sequence, offset in enumerate(
+            range(0, len(clip.payload), self._application_audio_chunk_bytes)
+        ):
+            payload = clip.payload[offset : offset + self._application_audio_chunk_bytes]
+            audio_end_ms = min(clip.duration_ms, (offset + len(payload)) // 8)
+            chunk = AudioChunk(payload, sequence, audio_end_ms)
+            await self.telephony.send_audio(chunk)
+            await self.telephony.mark_playback(f"{item_id}:{audio_end_ms}")
+        await self._record(
+            "assistant.authoritative_audio_started",
+            turn_epoch=self._application_speech_turn_epoch,
+            delivery_mode="application_audio",
+            item_id=item_id,
+        )
+        await self._record(
+            "assistant.application_audio_queued",
+            turn_epoch=self._application_speech_turn_epoch,
+            audio_bytes=len(clip.payload),
+            duration_ms=clip.duration_ms,
+        )
+        if not self._first_audio_emitted:
+            self._first_audio_emitted = True
+            await self._record("assistant.first_audio")
+        self._schedule_application_playback_watchdog(token, clip.duration_ms)
+
+    def _schedule_application_playback_watchdog(
+        self, token: str, duration_ms: int
+    ) -> None:
+        self._cancel_application_playback_watchdog()
+
+        async def wait_for_playback() -> None:
+            try:
+                await asyncio.sleep(duration_ms / 1000 + self._application_playback_slack)
+                await self.dispatch(
+                    SessionEvent(
+                        "application.speech_playback_timeout",
+                        {"token": token},
+                    )
+                )
+            except (asyncio.CancelledError, SessionClosedError, QueueClosedError):
+                return
+
+        self._application_playback_watchdog = asyncio.create_task(
+            wait_for_playback(),
+            name=f"application-playback:{self.descriptor.provider_call_id}:{token}",
+        )
+
+    def _cancel_application_playback_watchdog(self) -> None:
+        task = self._application_playback_watchdog
+        self._application_playback_watchdog = None
+        if task is not None and not task.done():
+            task.cancel()
+
     async def _append_control_directive(self, directive: str) -> str:
+        marker = "say_exactly:"
+        if directive.casefold().startswith(marker):
+            spoken_text = directive[len(marker):].strip()
+            if not spoken_text:
+                raise ValueError("say_exactly directive requires spoken text")
+            if self.speech_renderer is not None:
+                return await self._begin_application_speech(spoken_text)
         self._output_takeover_pending = True
         self._allow_application_gate_progress_audio = False
         await self._invalidate_active_delegation("application_reply_owned")
@@ -1168,12 +1626,10 @@ class CallSessionActor:
         await self.voice.cancel_response()
         # Progress and final replies are separate, auditable spoken turns.
         await self._flush_assistant_transcript("application_reply_boundary")
-        marker = "say_exactly:"
         if directive.casefold().startswith(marker):
             spoken_text = directive[len(marker):].strip()
-            if not spoken_text:
-                raise ValueError("say_exactly directive requires spoken text")
             self._exact_reply_takeover_active = True
+            self._exact_reply_takeover_epoch = self._caller_turn_epoch
             authorized_sequence = await self.voice.append_instructions(
                 "Authoritative application instruction: this update supersedes "
                 "any older workflow-state assumption or planned response. "
@@ -1206,6 +1662,10 @@ class CallSessionActor:
         if self._transports_closed:
             return
         self._transports_closed = True
+        self._cancel_application_playback_watchdog()
+        speech_task = self._application_speech_task
+        if speech_task is not None and not speech_task.done():
+            speech_task.cancel()
         await asyncio.gather(
             self.telephony.close(reason),
             self.voice.close(),

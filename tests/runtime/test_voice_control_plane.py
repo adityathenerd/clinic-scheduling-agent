@@ -395,7 +395,60 @@ class VoiceControlPlaneTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(WorkflowState.ACTIVE, self.state.state)
         self.assertTrue(self.state.tools_allowed)
-        self.assertIn("explicitly stated a new scheduling request", directive or "")
+        self.assertIn("another supported appointment", directive or "")
+
+    async def test_follow_up_clinic_question_is_not_discarded_after_decline_words(self) -> None:
+        classifier = FakeIdentityClassifier(
+            IdentityDecision.AFFIRMED,
+            follow_up_decision=FollowUpDecision.NEW_REQUEST,
+        )
+        self.subject.follow_up_classifier = classifier
+        self.state.state = WorkflowState.AWAITING_FOLLOW_UP_DECISION
+        transcript = (
+            "No, that's all. Do I have prerequisites for this appointment? "
+            "Is parking available at the clinic?"
+        )
+
+        await self.subject.observe_patient_transcript_delta(transcript)
+        directive = await self.subject.complete_patient_turn()
+
+        self.assertEqual(WorkflowState.ACTIVE, self.state.state)
+        self.assertTrue(self.state.tools_allowed)
+        self.assertIn(transcript, directive or "")
+
+        faq = await self.subject.handle_tool_intent(
+            ToolIntent(
+                "faq-after-reschedule",
+                "search_clinic_faqs",
+                OperationKind.READ,
+                {"query": "parking at the clinic"},
+            )
+        )
+        self.assertEqual(ToolStatus.SUCCEEDED, faq.status)
+        self.assertTrue(faq.payload["result"]["matches"])
+        self.assertIn(
+            "parking",
+            str(faq.payload["result"]["patient_facing_summary"]).casefold(),
+        )
+
+    async def test_completed_call_can_reopen_for_explicit_faq(self) -> None:
+        classifier = FakeIdentityClassifier(
+            IdentityDecision.AFFIRMED,
+            follow_up_decision=FollowUpDecision.NEW_REQUEST,
+        )
+        self.subject.follow_up_classifier = classifier
+        self.state.state = WorkflowState.COMPLETED
+
+        await self.subject.observe_patient_transcript_delta(
+            "Before I go, is there parking at the clinic?"
+        )
+
+        self.assertTrue(self.subject.application_owns_completed_turn)
+        directive = await self.subject.complete_patient_turn()
+
+        self.assertEqual(WorkflowState.ACTIVE, self.state.state)
+        self.assertTrue(self.state.tools_allowed)
+        self.assertIn("parking", (directive or "").casefold())
 
     async def test_active_information_call_closes_semantically_without_requiring_a_change(self) -> None:
         classifier = FakeIdentityClassifier(

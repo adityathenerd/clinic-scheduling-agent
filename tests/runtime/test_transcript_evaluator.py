@@ -18,6 +18,145 @@ def _issue_codes(result) -> set[str]:
 
 
 class TranscriptEvaluatorTests(unittest.TestCase):
+    def test_application_audio_without_final_playback_mark_is_hard_failure(self) -> None:
+        result = evaluate_voice_events(
+            [
+                {"event_type": "assistant.application_audio_render_started"},
+                {"event_type": "assistant.application_audio_queued"},
+                {"event_type": "call.ended", "outcome": "closed"},
+            ]
+        )
+
+        self.assertEqual("fail", result.status)
+        self.assertIn("application_audio_delivery_incomplete", _issue_codes(result))
+
+    def test_application_audio_final_playback_mark_disarms_failure(self) -> None:
+        result = evaluate_voice_events(
+            [
+                {"event_type": "assistant.application_audio_render_started"},
+                {"event_type": "assistant.application_audio_queued"},
+                {"event_type": "assistant.application_audio_completed"},
+                {"event_type": "assistant.turn", "transcript": "Identity accepted."},
+                {"event_type": "call.ended", "outcome": "closed"},
+            ]
+        )
+
+        self.assertNotIn("application_audio_delivery_incomplete", _issue_codes(result))
+
+    def test_application_audio_timeout_is_hard_failure(self) -> None:
+        result = evaluate_voice_events(
+            [
+                {"event_type": "assistant.application_audio_render_started"},
+                {"event_type": "assistant.application_audio_timeout"},
+                {"event_type": "call.ended", "outcome": "failed"},
+            ]
+        )
+
+        self.assertEqual("fail", result.status)
+        self.assertIn("application_audio_delivery_failed", _issue_codes(result))
+
+    def test_exact_reply_seen_only_at_call_stop_is_unverified(self) -> None:
+        expected = "Thank you. Your identity is confirmed."
+        result = evaluate_voice_events(
+            [
+                {
+                    "event_type": "patient.turn_processed",
+                    "occurred_at": "2026-10-08T00:00:00+00:00",
+                    "directive_kind": "say_exactly",
+                    "directive_digest": spoken_contract_digest(expected),
+                },
+                {
+                    "event_type": "assistant.turn",
+                    "occurred_at": "2026-10-08T00:00:30+00:00",
+                    "reason": "call_stopped",
+                    "transcript": expected,
+                },
+                {"event_type": "call.ended", "outcome": "closed"},
+            ]
+        )
+
+        self.assertEqual("fail", result.status)
+        self.assertIn("application_reply_playback_unverified", _issue_codes(result))
+
+    def test_substantive_follow_up_request_cannot_be_closed_as_declined(self) -> None:
+        result = evaluate_voice_events(
+            [
+                {
+                    "event_type": "patient.turn_processed",
+                    "workflow_before": "awaiting_follow_up_decision",
+                    "workflow_after": "completed",
+                    "transcript": (
+                        "No, that's all. Do I have prerequisites for this appointment? "
+                        "I would like to know whether parking is available at the clinic."
+                    ),
+                },
+                {
+                    "event_type": "follow_up.completed_turn_classified",
+                    "decision": "declined",
+                    "tools_unlocked": False,
+                },
+                {
+                    "event_type": "assistant.turn",
+                    "transcript": "Thank you. Take care.",
+                },
+            ]
+        )
+
+        self.assertEqual("fail", result.status)
+        self.assertIn(
+            "substantive_follow_up_request_discarded",
+            _issue_codes(result),
+        )
+
+    def test_availability_retrieval_failure_without_search_is_hard_failure(self) -> None:
+        result = evaluate_voice_events(
+            [
+                {
+                    "event_type": "caller.turn",
+                    "transcript": "Do you have any other time available later this week?",
+                },
+                {
+                    "event_type": "tool.requested",
+                    "tool_name": "get_appointment",
+                },
+                {
+                    "event_type": "assistant.turn",
+                    "transcript": (
+                        "I'm sorry, I wasn't able to retrieve availability, so I "
+                        "can't confirm another time."
+                    ),
+                },
+            ]
+        )
+
+        self.assertEqual("fail", result.status)
+        self.assertIn("availability_failure_without_search", _issue_codes(result))
+
+    def test_availability_retrieval_failure_is_grounded_by_search_attempt(self) -> None:
+        result = evaluate_voice_events(
+            [
+                {
+                    "event_type": "caller.turn",
+                    "transcript": "Are there any available timings on Friday?",
+                },
+                {
+                    "event_type": "tool.requested",
+                    "tool_name": "search_slots",
+                },
+                {
+                    "event_type": "tool.decision",
+                    "tool_name": "search_slots",
+                    "domain_status": "failed",
+                },
+                {
+                    "event_type": "assistant.turn",
+                    "transcript": "I couldn't retrieve availability for Friday.",
+                },
+            ]
+        )
+
+        self.assertNotIn("availability_failure_without_search", _issue_codes(result))
+
     def test_identity_pending_claim_after_unlock_is_hard_failure(self) -> None:
         result = evaluate_voice_events(
             [
@@ -391,6 +530,27 @@ class TranscriptEvaluatorTests(unittest.TestCase):
         self.assertIn("confirmation_acceptance_loop", _issue_codes(result))
         self.assertEqual("fail", result.status)
 
+    def test_confirmed_backend_conflict_is_a_hard_failure(self) -> None:
+        result = evaluate_voice_events(
+            [
+                {"event_type": "call.started", "direction": "outbound"},
+                {
+                    "event_type": "confirmation.mutation_executed",
+                    "proposal_id": "proposal-0001",
+                    "tool_name": "edit_appointment",
+                    "domain_status": "conflict",
+                },
+                {"event_type": "call.ended", "outcome": "closed"},
+            ]
+        )
+
+        issue = next(
+            item for item in result.hard_failures
+            if item.code == "confirmed_mutation_conflict"
+        )
+        self.assertIn("proposal_id=proposal-0001", issue.evidence[0])
+        self.assertEqual("fail", result.status)
+
     def test_v04_is_a_hard_failure_for_observed_confirmation_loop(self) -> None:
         result = evaluate_voice_events(
             load_voice_events(PROJECT_ROOT / "data" / "voice-v04.jsonl")
@@ -671,6 +831,61 @@ class TranscriptEvaluatorTests(unittest.TestCase):
             "application_reply_mixed_with_autonomous_output", _issue_codes(result)
         )
         self.assertEqual("pass_with_observations", result.status)
+
+    def test_accepted_follow_up_that_strands_after_instruction_is_a_hard_failure(self) -> None:
+        result = evaluate_voice_events(
+            [
+                {
+                    "event_type": "patient.turn_processed",
+                    "occurred_at": "2026-10-08T10:32:15+00:00",
+                    "workflow_before": "awaiting_follow_up_decision",
+                    "workflow_after": "active",
+                    "directive_kind": "model_input",
+                    "transcript": "Can I get medicines from the clinic pharmacy?",
+                },
+                {
+                    "event_type": "control.completed_turn_directive",
+                    "occurred_at": "2026-10-08T10:32:16+00:00",
+                },
+                {
+                    "event_type": "assistant.authoritative_audio_started",
+                    "occurred_at": "2026-10-08T10:32:16.100000+00:00",
+                },
+                {
+                    "event_type": "call.remote_stop",
+                    "occurred_at": "2026-10-08T10:32:58+00:00",
+                },
+            ]
+        )
+
+        self.assertIn("accepted_follow_up_no_progress", _issue_codes(result))
+        self.assertEqual("fail", result.status)
+
+    def test_accepted_follow_up_with_faq_tool_progress_passes_liveness_check(self) -> None:
+        result = evaluate_voice_events(
+            [
+                {
+                    "event_type": "patient.turn_processed",
+                    "occurred_at": "2026-10-08T10:32:15+00:00",
+                    "workflow_before": "awaiting_follow_up_decision",
+                    "workflow_after": "active",
+                    "directive_kind": "model_input",
+                    "transcript": "Can I get medicines from the clinic pharmacy?",
+                },
+                {
+                    "event_type": "tool.requested",
+                    "occurred_at": "2026-10-08T10:32:16+00:00",
+                    "tool_name": "search_clinic_faqs",
+                },
+                {
+                    "event_type": "assistant.turn",
+                    "occurred_at": "2026-10-08T10:32:18+00:00",
+                    "transcript": "The clinic pharmacy can dispense prescribed medicines.",
+                },
+            ]
+        )
+
+        self.assertNotIn("accepted_follow_up_no_progress", _issue_codes(result))
 
     def test_clean_exact_close_has_no_mixed_application_reply_observation(self) -> None:
         result = evaluate_voice_events(

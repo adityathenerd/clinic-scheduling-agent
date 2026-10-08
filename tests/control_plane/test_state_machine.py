@@ -187,7 +187,7 @@ class ConversationStateMachineTests(unittest.TestCase):
         )
 
         self.assertEqual(WorkflowState.AWAITING_FOLLOW_UP_DECISION, self.subject.state)
-        self.assertIn("Would you like help", directive.reply or "")
+        self.assertIn("Would you like any other", directive.reply or "")
         self.assertFalse(self.subject.tools_allowed)
         self.assertEqual(
             "follow_up_offer_presented", self.subject.transitions[-1].reason
@@ -220,7 +220,44 @@ class ConversationStateMachineTests(unittest.TestCase):
 
         self.assertEqual(WorkflowState.ACTIVE, self.subject.state)
         self.assertTrue(self.subject.tools_allowed)
-        self.assertIn("explicitly stated a new scheduling request", directive.model_input or "")
+        self.assertIn("another supported appointment", directive.model_input or "")
+
+    def test_trailing_clinic_question_overrides_earlier_decline(self) -> None:
+        self.subject.state = WorkflowState.AWAITING_FOLLOW_UP_DECISION
+        self.subject.authority_mode = "patient_name_confirmation"
+        transcript = (
+            "No, that's all. Do I have prerequisites for this appointment? "
+            "Is parking available at the clinic?"
+        )
+
+        directive = self.subject.accept_patient_turn(
+            transcript,
+            authorize_name_confirmation=lambda confirmed: confirmed,
+            follow_up_decision=FollowUpDecision.NEW_REQUEST,
+            require_semantic_follow_up=True,
+        )
+
+        self.assertEqual(WorkflowState.ACTIVE, self.subject.state)
+        self.assertTrue(self.subject.tools_allowed)
+        self.assertIn(transcript, directive.model_input or "")
+
+    def test_explicit_request_reopens_completed_call(self) -> None:
+        self.subject.state = WorkflowState.COMPLETED
+
+        directive = self.subject.accept_patient_turn(
+            "Before I go, is parking available at the clinic?",
+            authorize_name_confirmation=lambda confirmed: confirmed,
+            follow_up_decision=FollowUpDecision.NEW_REQUEST,
+            require_semantic_follow_up=True,
+        )
+
+        self.assertEqual(WorkflowState.ACTIVE, self.subject.state)
+        self.assertTrue(self.subject.tools_allowed)
+        self.assertEqual(
+            "follow_up_reopened_after_close",
+            self.subject.transitions[-1].reason,
+        )
+        self.assertIn("parking", (directive.model_input or "").casefold())
 
     def test_unclear_follow_up_answer_reprompts_without_unlocking(self) -> None:
         self.subject.state = WorkflowState.AWAITING_FOLLOW_UP_DECISION

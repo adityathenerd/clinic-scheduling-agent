@@ -68,6 +68,7 @@ _PASSIVE_RESPONSE_EVENTS = frozenset(
 _PASSIVE_SESSION_EVENTS = frozenset(
     {
         "session.commentary.appended",
+        "session.thinking.appended",
         "session.usage.updated",
     }
 )
@@ -208,6 +209,19 @@ class GPTLiveVoiceEngine:
             }
         )
 
+    async def append_thinking(self, content: str) -> None:
+        """Add quiet application context without requesting spoken output."""
+
+        if not content.strip():
+            raise ValueError("thinking content is required")
+        await self._require_connection().send(
+            {
+                "type": "session.thinking.append",
+                "content": content,
+                "delegation_id": None,
+            }
+        )
+
     async def append_instructions(self, content: str) -> int:
         """Append trusted wording and wait until the Live session accepts it.
 
@@ -222,6 +236,13 @@ class GPTLiveVoiceEngine:
         event_id = f"instruction-{uuid4().hex}"
         acknowledgement = asyncio.get_running_loop().create_future()
         self._pending_instruction_acks[event_id] = acknowledgement
+        # Ownership starts when the trusted instruction is sent, not when its
+        # acknowledgement happens to arrive.  Live may begin emitting the new
+        # instructed response before session.instructions.appended; using the
+        # acknowledgement-time sequence clips valid leading words.  Output that
+        # was already observed before this send retains a lower sequence and is
+        # still rejected by the actor's timeline cutoff.
+        authorized_sequence = self._audio_sequence
         try:
             await self._require_connection().send(
                 {
@@ -231,9 +252,10 @@ class GPTLiveVoiceEngine:
                     "delegation_id": None,
                 }
             )
-            return await asyncio.wait_for(
+            await asyncio.wait_for(
                 acknowledgement, timeout=self._instruction_ack_timeout
             )
+            return authorized_sequence
         except asyncio.TimeoutError as exc:
             raise TimeoutError(
                 "GPT-Live did not acknowledge the appended instructions"

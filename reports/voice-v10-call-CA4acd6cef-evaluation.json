@@ -1,0 +1,36 @@
+{
+  "hard_failure_count": 2,
+  "issues": [
+    {
+      "code": "workflow_incomplete_at_hangup",
+      "event_indexes": [],
+      "evidence": [],
+      "message": "The call ended with a scheduling workflow still in progress.",
+      "severity": "failure"
+    },
+    {
+      "code": "accepted_follow_up_no_progress",
+      "event_indexes": [
+        1281,
+        1286
+      ],
+      "evidence": [
+        "deadline_seconds=5.0; elapsed_seconds=42.725",
+        "Understood. Actually, I would like to understand how the pharmacy uh works in the clinic. Can I get medicines from there"
+      ],
+      "message": "An accepted post-task request returned to ACTIVE but produced no tool, completed reply, recovery, or handoff.",
+      "severity": "failure"
+    }
+  ],
+  "metrics": {
+    "assistant_turns": 8,
+    "calls": 1,
+    "patient_turns": 5,
+    "tool_requests": 5,
+    "verified_writes": 1,
+    "write_requests": 1
+  },
+  "observation_count": 0,
+  "schema_version": "voice-quality-v1",
+  "status": "fail"
+}

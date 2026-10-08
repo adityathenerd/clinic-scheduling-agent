@@ -481,6 +481,27 @@ class GPTLiveVoiceEngineTests(unittest.IsolatedAsyncioTestCase):
         )
         await engine.close()
 
+    async def test_application_thinking_is_sent_as_quiet_live_context(self) -> None:
+        connection = FakeConnection([{"type": "session.started", "session": {}}])
+        engine = GPTLiveVoiceEngine(
+            self.receive, connection_factory=lambda: connection, close_timeout=0
+        )
+        await engine.connect(session_config())
+        await engine.append_thinking(
+            "The application told the caller that identity is confirmed."
+        )
+        self.assertEqual(
+            {
+                "type": "session.thinking.append",
+                "content": (
+                    "The application told the caller that identity is confirmed."
+                ),
+                "delegation_id": None,
+            },
+            connection.sent[-1],
+        )
+        await engine.close()
+
     async def test_exact_application_wording_uses_live_instruction_event(self) -> None:
         connection = FakeConnection([{"type": "session.started", "session": {}}])
         engine = GPTLiveVoiceEngine(
@@ -541,6 +562,42 @@ class GPTLiveVoiceEngineTests(unittest.IsolatedAsyncioTestCase):
         cutoff = await engine.append_instructions("Say exactly: Exact proposal.")
         transcript = next(e for e in self.received if e.kind == "voice.output_transcript.delta")
         self.assertLess(transcript.data["audio_sequence"], cutoff)
+        await engine.close()
+
+    async def test_new_instructed_output_before_ack_is_inside_authorized_timeline(self) -> None:
+        connection = FakeConnection(
+            [{"type": "session.started", "session": {}}],
+            auto_ack_instructions=False,
+        )
+        engine = GPTLiveVoiceEngine(
+            self.receive,
+            connection_factory=lambda: connection,
+            close_timeout=0,
+            instruction_ack_timeout=0.2,
+        )
+        await engine.connect(session_config())
+
+        pending = asyncio.create_task(
+            engine.append_instructions("Say exactly: Please confirm this request.")
+        )
+        await wait_until(
+            lambda: any(e.get("type") == "session.instructions.append" for e in connection.sent)
+        )
+        instruction = connection.sent[-1]
+        connection.events.put_nowait(
+            {"type": "session.output_transcript.delta", "delta": "Please"}
+        )
+        await wait_until(lambda: any(e.kind == "voice.output_transcript.delta" for e in self.received))
+        transcript = next(e for e in self.received if e.kind == "voice.output_transcript.delta")
+        connection.events.put_nowait(
+            {
+                "type": "session.instructions.appended",
+                "client_event_id": instruction["event_id"],
+            }
+        )
+
+        cutoff = await pending
+        self.assertGreaterEqual(transcript.data["audio_sequence"], cutoff)
         await engine.close()
 
     async def test_instruction_ack_is_not_blocked_by_slow_application_callback(self) -> None:

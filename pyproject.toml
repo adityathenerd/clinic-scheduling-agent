@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Safety-first clinic scheduling agent and evaluation harness"
 requires-python = ">=3.11"
 dependencies = [
+  "audioop-lts>=0.2; python_version >= '3.13'",
   "fastapi>=0.115,<1",
   "openai[realtime]>=3.8,<4",
   "python-dotenv>=1,<2",

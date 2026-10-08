@@ -1,0 +1,33 @@
+{
+  "call_id": "CAd58e0ab9bb4c044f79a81a16ea062278",
+  "hard_failure_count": 2,
+  "issues": [
+    {
+      "code": "workflow_incomplete_at_hangup",
+      "event_indexes": [],
+      "evidence": [],
+      "message": "The call ended with a scheduling workflow still in progress.",
+      "severity": "failure"
+    },
+    {
+      "code": "application_reply_playback_unverified",
+      "event_indexes": [41, 46],
+      "evidence": [
+        "Exact reply transcript was deferred until call termination; latency_seconds=59.4."
+      ],
+      "message": "An exact application reply was only observed when the call stopped, so caller playback was not verified.",
+      "severity": "failure"
+    }
+  ],
+  "metrics": {
+    "assistant_turns": 2,
+    "calls": 1,
+    "patient_turns": 1,
+    "tool_requests": 0,
+    "verified_writes": 0,
+    "write_requests": 0
+  },
+  "observation_count": 0,
+  "schema_version": "voice-quality-v1",
+  "status": "fail"
+}

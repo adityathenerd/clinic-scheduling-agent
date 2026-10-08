@@ -1,0 +1,42 @@
+{
+  "schema_version": "voice-quality-v1",
+  "provider_call_id": "CA73bb9e99db7eb4686b8cf7cbabbd8751",
+  "evaluated_at": "2026-10-08T01:35:00+05:30",
+  "status": "fail",
+  "hard_failure_count": 2,
+  "issues": [
+    {
+      "code": "exact_application_reply_not_honored",
+      "severity": "failure",
+      "message": "Assistant did not say the application-owned exact reply and nothing else.",
+      "evidence": [
+        "The spoken proposal began with 'this rescheduling request'; the leading 'Please confirm' transcript fragments were suppressed before the instruction acknowledgement."
+      ]
+    },
+    {
+      "code": "confirmed_mutation_conflict",
+      "severity": "failure",
+      "message": "A caller-confirmed appointment mutation reached a backend conflict instead of the promised outcome.",
+      "evidence": [
+        "proposal_id=proposal-0001; tool=edit_appointment; domain_status=conflict",
+        "The appointment already had slot-1630 held as reschedule-0001; the service rejected a second held reschedule only after confirmation."
+      ]
+    }
+  ],
+  "metrics": {
+    "assistant_turns": 10,
+    "patient_turns": 7,
+    "tool_requests": 5,
+    "write_requests": 1,
+    "verified_writes": 0
+  },
+  "remediation": {
+    "pending_reschedule": "A newly confirmed reschedule now atomically releases the prior held slot and replaces it with the newly selected held slot. The exact proposal discloses that replacement.",
+    "live_output_boundary": "The first authorized output sequence is captured when the trusted instruction is sent, not when session.instructions.appended arrives.",
+    "evaluation": "confirmed_mutation_conflict is now a deterministic hard failure."
+  },
+  "verification": {
+    "tests_run": 383,
+    "tests_passed": 383
+  }
+}

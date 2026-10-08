@@ -37,6 +37,7 @@ from clinic_agent.control_plane.state_machine import (
     ConversationStateMachine,
     FollowUpDecision,
     IdentityDecision,
+    POST_TASK_HELP_OFFER,
     WorkflowState,
 )
 from clinic_agent.runtime.text_session import GuardedToolRuntime, WRITE_TOOLS
@@ -145,6 +146,7 @@ class VoiceAgentControlPlane:
             WorkflowState.AWAITING_NAME_CONFIRMATION,
             WorkflowState.CONFIRMATION_PENDING,
             WorkflowState.AWAITING_FOLLOW_UP_DECISION,
+            WorkflowState.COMPLETED,
         }:
             return True
         if self.state_machine.state is not WorkflowState.ACTIVE:
@@ -311,6 +313,7 @@ class VoiceAgentControlPlane:
                 WorkflowState.AWAITING_NAME_CONFIRMATION,
                 WorkflowState.CONFIRMATION_PENDING,
                 WorkflowState.AWAITING_FOLLOW_UP_DECISION,
+                WorkflowState.COMPLETED,
             }:
                 async with self._transcript_lock:
                     current = "".join(self._transcript_fragments).strip()
@@ -346,6 +349,9 @@ class VoiceAgentControlPlane:
                 )
                 return observation.directive if observation else None
             if self.state_machine.state is WorkflowState.AWAITING_FOLLOW_UP_DECISION:
+                observation = await self._classify_follow_up_turn(transcript)
+                return observation.directive if observation else None
+            if self.state_machine.state is WorkflowState.COMPLETED:
                 observation = await self._classify_follow_up_turn(transcript)
                 return observation.directive if observation else None
 
@@ -735,7 +741,7 @@ class VoiceAgentControlPlane:
                 )
                 text = (
                     "say_exactly: Thank you for confirming your identity. "
-                    f"{summary} Would you like any other scheduling help?"
+                    f"{summary} {POST_TASK_HELP_OFFER}"
                 )
                 self.state_machine.notification_delivered()
                 await self._record(
@@ -1055,7 +1061,7 @@ class VoiceAgentControlPlane:
                 raise RuntimeError("follow-up classifier is not configured")
             decision = await self.follow_up_classifier.classify_follow_up(
                 transcript=transcript,
-                offered_help="Would you like help with another appointment?",
+                offered_help=POST_TASK_HELP_OFFER,
             )
         except Exception as exc:
             await self._record(

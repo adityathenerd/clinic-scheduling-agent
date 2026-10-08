@@ -17,5 +17,6 @@ data/*.jsonl
 data/*.log
 # Runtime data and temporary outputs stay local; synthetic fixtures live in tests.
 /data/
+/artifacts/*.log
 # Local shell artifact; preserve it on disk without versioning it.
 /=

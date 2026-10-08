@@ -660,16 +660,21 @@ fragment can refine the request but can never become confirmation for a prompt
 the patient had not yet encountered. The arming epoch also includes any caller
 turn that began while the proposal was being prepared or delivered.
 
-Application-owned speech now takes playback ownership before a speculative write
-or an exact reply: Python suppresses autonomous audio and transcripts, clears
-queued playback, cancels delegated output, and waits for the correlated Live
-instruction acknowledgement. Progress updates use this same acknowledgement
-boundary and occur once per caller turn. Progress and final replies are logged
-as separate turns. Audio and transcript deltas share one monotonic output
-sequence, and the suppression cutoff remains in force for delayed old events.
-GPT-Live has no wire-level response-cancel command; clearing playback and gating
-the transport enforce suppression locally. Exact wording still requires the
-recorded speech/transcript acceptance check.
+Application-owned speech has one playback owner. Brief, non-consequential
+“checking now” updates remain on GPT-Live for low latency. Exact identity,
+proposal, confirmation, failure, handoff, and closing messages are rendered by
+the application with OpenAI Speech, converted from PCM16LE/24 kHz to PCMU/8 kHz,
+and queued directly to Twilio. While that clip is rendering or playing, Python
+drops autonomous Live output and supplies the spoken turn to GPT-Live through
+quiet `session.thinking.append` context. The workflow does not consider the
+message delivered until Twilio returns the final playback mark; only then is an
+`assistant.turn` recorded, and the next caller speech reopens Live output.
+Barge-in clears the clip and invalidates late render results. Render failure or
+a missing final playback mark fails closed and requests front-desk recovery.
+The deterministic evaluator separately rejects failed and incomplete
+application-audio lifecycles. This replaces the earlier instruction-only
+takeover, which could not guarantee completion because GPT-Live exposes neither
+response cancellation nor an output-audio-done event.
 
 Every completed normal `active` caller turn now gets an activity token and a
 five-second deadline for first downstream progress. Accepted audio/transcript,
@@ -747,6 +752,13 @@ backend with recorded timely progress passes this liveness check. Conversational
 outcome, such as premature commitment wording or recoverable repeated prompts,
 remain visible as observations. The checks are scoped per call so sequential
 calls in one log cannot create false repetition findings.
+
+`accepted_follow_up_no_progress` separately guards the state edge from
+`awaiting_follow_up_decision` back to `active`. An instruction acknowledgement
+or one audio frame does not satisfy this gate: the accepted request must reach a
+guarded tool, a completed assistant turn, a recovery, or a handoff within the
+deadline. This catches a real pharmacy-FAQ call in which a delegation was
+cancelled during follow-up classification and the provider response then stalled.
 
 Task completion is not consent for another task. After cancellation the state
 machine asks whether the patient wants more scheduling help and enters a

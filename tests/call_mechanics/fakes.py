@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from clinic_agent.call_mechanics.models import (
     AudioChunk,
     CallDescriptor,
+    SpeechClip,
     ToolIntent,
     ToolResult,
     ToolStatus,
@@ -54,6 +55,7 @@ class FakeVoice:
         self.tool_results: list[ToolResult] = []
         self.cancelled_delegations: list[tuple[str, str]] = []
         self.commentary: list[str] = []
+        self.thinking: list[str] = []
         self.instructions: list[str] = []
         self.instruction_sequence = instruction_sequence
         self.close_count = 0
@@ -76,6 +78,9 @@ class FakeVoice:
     async def append_commentary(self, content: str) -> None:
         self.commentary.append(content)
 
+    async def append_thinking(self, content: str) -> None:
+        self.thinking.append(content)
+
     async def append_instructions(self, content: str) -> int | None:
         self.instructions.append(content)
         return self.instruction_sequence
@@ -88,6 +93,24 @@ class FakeVoice:
 
     async def close(self) -> None:
         self.close_count += 1
+
+
+class FakeSpeechRenderer:
+    def __init__(
+        self,
+        *,
+        clip: SpeechClip | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.clip = clip or SpeechClip(b"\xff" * 800, 100)
+        self.error = error
+        self.texts: list[str] = []
+
+    async def render(self, text: str) -> SpeechClip:
+        self.texts.append(text)
+        if self.error is not None:
+            raise self.error
+        return self.clip
 
 
 class FakeControlPlane:

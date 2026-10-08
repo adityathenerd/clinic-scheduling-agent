@@ -219,6 +219,38 @@ rejoined to the originating request and invalidates the premature proposal;
 arrival after a state transition never changes the meaning of speech that began
 before that transition.
 
+### Gate-to-active liveness graph
+
+A caller may state the next request while the application still owns the
+post-task follow-up gate. Model work produced during that classifier window is
+not executed and is not abandoned: it is quarantined under the current turn
+epoch until the deterministic decision arrives.
+
+```mermaid
+flowchart TD
+    A[Caller turn begins under application gate] --> B[Quarantine delegation and tool intent]
+    B --> C{Completed-turn decision}
+    C -->|Declined or terminal| D[Invalidate quarantined work]
+    D --> E[Exact close or no-change reply]
+    C -->|Safety or confirmation directive| F[Invalidate quarantined work]
+    F --> G[Application-owned exact reply]
+    C -->|Accepted supported request| H[Create normal-turn activity token]
+    H --> I[Release application output gate]
+    I --> J{Matching quarantined work exists?}
+    J -->|Yes| K[Release exactly once]
+    K --> L[Guarded tool or caller-visible reply]
+    J -->|No| M[Append explicit normal-turn instruction]
+    M --> L
+    L --> N{Progress before deadline?}
+    N -->|Yes| O[Continue to task or post-task state]
+    N -->|No| P[Safe recovery or escalation]
+```
+
+Every branch is total: it ends in a caller-visible reply, guarded execution,
+explicit recovery, escalation, or clean close. Instruction acceptance,
+delegation creation, and a first audio frame are telemetry, not terminal proof
+that the request was handled.
+
 ## Decision graph
 
 Evaluate this graph for every normalized patient act and significant tool event:

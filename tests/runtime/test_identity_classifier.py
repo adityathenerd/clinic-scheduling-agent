@@ -112,6 +112,9 @@ class ResponsesIdentityTurnClassifierTests(unittest.IsolatedAsyncioTestCase):
             request["tool_choice"],
         )
         self.assertTrue(request["tools"][0]["strict"])  # type: ignore[index]
+        instructions = str(request["instructions"])
+        self.assertIn("later request controls", instructions)
+        self.assertIn("public clinic-information question", instructions)
 
 
 if __name__ == "__main__":

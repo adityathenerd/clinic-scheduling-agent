@@ -143,10 +143,15 @@ class ResponsesIdentityTurnClassifier:
             model=self.model,
             instructions=(
                 "Classify only the caller's continuation intent in the supplied "
-                "conversation context. Use new_request only when the caller clearly "
-                "states another appointment task, accepted for a plain yes to an "
-                "explicit offer, declined for no or call-closing language, and "
-                "unclear otherwise. Never infer a scheduling change from politeness. "
+                "conversation context. Use new_request when the caller clearly states "
+                "another scheduling task, asks for appointment information, or asks a "
+                "public clinic-information question such as parking, insurance, arrival, "
+                "or provider information. If a turn starts with no, that's all, goodbye, "
+                "or similar closing language but then contains a substantive request, "
+                "the later request controls and the decision must be new_request. Use "
+                "accepted for a plain yes to an explicit offer, declined only when the "
+                "caller closes with no further request, and unclear otherwise. Never "
+                "infer a scheduling change from politeness. "
                 "You must call interpret_follow_up_decision exactly once."
             ),
             input=(

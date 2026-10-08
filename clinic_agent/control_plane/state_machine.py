@@ -52,6 +52,11 @@ class FollowUpDecision(str, Enum):
     UNCLEAR = "unclear"
 
 
+POST_TASK_HELP_OFFER = (
+    "Would you like any other scheduling or clinic information help?"
+)
+
+
 @dataclass(frozen=True, slots=True)
 class StateTransition:
     sequence: int
@@ -334,7 +339,17 @@ class ConversationStateMachine:
                     decision = FollowUpDecision.DECLINED
                 elif any(
                     word in normalized
-                    for word in ("book", "schedule", "reschedule", "cancel", "appointment")
+                    for word in (
+                        "book",
+                        "schedule",
+                        "reschedule",
+                        "cancel",
+                        "appointment",
+                        "parking",
+                        "insurance",
+                        "prerequisite",
+                        "clinic",
+                    )
                 ):
                     decision = FollowUpDecision.NEW_REQUEST
                 else:
@@ -347,24 +362,42 @@ class ConversationStateMachine:
                 if decision is FollowUpDecision.NEW_REQUEST:
                     return TurnDirective(
                         model_input=(
-                            "Application event: the caller explicitly stated a new "
-                            f"scheduling request: {utterance.strip()}"
+                            "Application event: the caller explicitly stated another "
+                            "supported appointment or clinic-information request. "
+                            f"Handle the full request now: {utterance.strip()}"
                         )
                     )
                 return TurnDirective(
                     model_input=(
-                        "Application event: the caller accepted the offer of more "
-                        "scheduling help. Ask what appointment task they want help with."
+                        "Application event: the caller accepted the offer of more help. "
+                        "Ask what scheduling or clinic information they need."
                     )
                 )
             return TurnDirective(
                 reply=(
-                    "Would you like help with another appointment? Please say yes or no, "
-                    "or tell me the new scheduling request."
+                    f"{POST_TASK_HELP_OFFER} Please say yes or no, or tell me the request."
                 )
             )
 
         if self.state is WorkflowState.COMPLETED:
+            if require_semantic_follow_up:
+                if follow_up_decision in {
+                    FollowUpDecision.ACCEPTED,
+                    FollowUpDecision.NEW_REQUEST,
+                }:
+                    self._transition(
+                        WorkflowState.ACTIVE,
+                        "follow_up_reopened_after_close",
+                    )
+                    return TurnDirective(
+                        model_input=(
+                            "Application event: before disconnecting, the caller stated "
+                            "another supported appointment or clinic-information request. "
+                            f"Handle the full request now: {utterance.strip()}"
+                        )
+                    )
+                if follow_up_decision is FollowUpDecision.DECLINED:
+                    return TurnDirective(reply="Thank you. Take care.")
             # A completed task never silently becomes another task. Present an
             # explicit offer first while keeping all protected tools locked.
             self._transition(
@@ -372,10 +405,7 @@ class ConversationStateMachine:
                 "follow_up_offer_presented",
             )
             return TurnDirective(
-                reply=(
-                    "That scheduling task is complete. Would you like help with "
-                    "another appointment?"
-                )
+                reply=f"That scheduling task is complete. {POST_TASK_HELP_OFFER}"
             )
 
         return TurnDirective(

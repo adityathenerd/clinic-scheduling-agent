@@ -34,6 +34,7 @@ from clinic_agent.knowledge import ClinicFAQKnowledgeBase
 from clinic_agent.control_plane.state_machine import (
     ConfirmationDecision,
     ConversationStateMachine,
+    POST_TASK_HELP_OFFER,
     WorkflowState,
 )
 from clinic_agent.control_plane.tool_contracts import (
@@ -430,7 +431,7 @@ class GuardedToolRuntime:
             "operation": "proposal_created",
             "appointment": _jsonable(appointment),
             "patient_facing_summary": (
-                f"{appointment_summary} Would you like any other scheduling help?"
+                f"{appointment_summary} {POST_TASK_HELP_OFFER}"
             ),
         }
 
@@ -460,6 +461,17 @@ class GuardedToolRuntime:
             replacement_provider = self.harness.store.providers[
                 replacement.provider_id
             ]
+            pending_replacement = (
+                self.harness.store.slots.get(current.pending_replacement_slot_id)
+                if current.pending_replacement_slot_id
+                else None
+            )
+            pending_replacement_notice = (
+                ". This will replace your pending rescheduling request for "
+                f"{self._spoken_time(pending_replacement.starts_at)}"
+                if pending_replacement is not None
+                else ""
+            )
             summary = (
                 f"Move your {current_type.display_name} with "
                 f"{current_provider.display_name} from "
@@ -468,6 +480,7 @@ class GuardedToolRuntime:
                 f"{self._spoken_time(replacement.starts_at)} with "
                 f"{replacement_provider.display_name} at "
                 f"{self._location_name(replacement.location_id)}"
+                f"{pending_replacement_notice}"
             )
             return self._prepare(
                 "edit_appointment",
@@ -536,8 +549,8 @@ class GuardedToolRuntime:
                 f"{self._location_name(replacement.location_id)} is held for clinic "
                 "review. Your current appointment on "
                 f"{self._spoken_time(appointment.starts_at)} remains in place until "
-                "approval. We will call you once the clinic decides. Would you like "
-                "any other scheduling help?"
+                f"approval. We will call you once the clinic decides. "
+                f"{POST_TASK_HELP_OFFER}"
             ),
         }
 
@@ -782,6 +795,10 @@ class GuardedToolRuntime:
             "slot_id": appointment.slot_id,
             "provider_id": appointment.provider_id,
             "appointment_type_id": appointment.appointment_type_id,
+            # Keep canonical scheduling identifiers alongside the patient-facing
+            # labels.  Follow-on tools must not have to guess an internal
+            # location ID from a spoken address.
+            "location_id": appointment.location_id,
             "starts_at": appointment.starts_at.isoformat(),
             "patient_facing_details": {
                 "appointment_type": appointment_type.display_name,

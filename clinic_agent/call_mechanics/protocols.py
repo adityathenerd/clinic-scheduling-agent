@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from .models import AudioChunk, CallDescriptor, ToolIntent, ToolResult, VoiceSessionConfig
+from .models import (
+    AudioChunk,
+    CallDescriptor,
+    SpeechClip,
+    ToolIntent,
+    ToolResult,
+    VoiceSessionConfig,
+)
 
 
 class TelephonyAdapter(Protocol):
@@ -32,6 +39,10 @@ class LiveFrontend(Protocol):
 
     async def append_commentary(self, content: str) -> None: ...
 
+    async def append_thinking(self, content: str) -> None:
+        """Add quiet context that the live model must not speak on append."""
+        ...
+
     async def append_instructions(self, content: str) -> int | None:
         """Append instructions and return the first audio sequence they may own."""
         ...
@@ -53,6 +64,12 @@ class VoiceEngine(LiveFrontend, DelegatedBackend, Protocol):
     A direct Realtime adapter implements ``cancel_delegation`` as a safe no-op;
     this keeps the application actor and control-plane contract unchanged.
     """
+
+
+class SpeechRenderer(Protocol):
+    """Render application-owned wording into telephony-ready audio."""
+
+    async def render(self, text: str) -> SpeechClip: ...
 
 
 class AgentControlPlane(Protocol):

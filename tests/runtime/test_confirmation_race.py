@@ -229,6 +229,69 @@ class ConfirmationSnapshotTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ExactReplyOwnershipTests(unittest.IsolatedAsyncioTestCase):
+    async def test_exact_reply_that_starts_before_instruction_ack_keeps_its_first_words(self):
+        exact = "Please confirm this rescheduling request. Please say yes or no."
+
+        class Connection(live_tests.FakeConnection):
+            async def send(self, event):
+                await super().send(event)
+                if event.get("type") == "session.instructions.append":
+                    self.events.put_nowait({
+                        "type": "session.output_transcript.delta",
+                        "delta": exact,
+                    })
+                    self.events.put_nowait({
+                        "type": "session.output_audio.delta",
+                        "delta": base64.b64encode(b"complete exact proposal").decode(),
+                    })
+                    self.events.put_nowait({
+                        "type": "session.instructions.appended",
+                        "client_event_id": event["event_id"],
+                    })
+
+        control = FakeControlPlane(
+            application_owns_completed_turn=True,
+            completed_turn_directive=f"say_exactly: {exact}",
+        )
+        connection = Connection(
+            [{"type": "session.started", "session": {}}],
+            auto_ack_instructions=False,
+        )
+        telephony, sink, pool = FakeTelephony(), TranscriptSink(), AsyncWorkerPool(4)
+        actor = None
+
+        async def receive(event):
+            if actor is not None and not actor.done.is_set():
+                await actor.dispatch(event)
+
+        voice = GPTLiveVoiceEngine(
+            receive,
+            connection_factory=lambda: connection,
+            close_timeout=0,
+        )
+        actor = CallSessionActor(
+            CallDescriptor("CA-pre-ack-exact", CallDirection.INBOUND),
+            telephony,
+            voice,
+            control,
+            sink,
+            pool,
+            turn_completion_delay=0,
+        )
+        await actor.start()
+        self.addAsyncCleanup(actor.close)
+        await actor.dispatch(SessionEvent("caller.speech_started"))
+        await actor.dispatch(SessionEvent("voice.input_transcript.delta", {"delta": "yes"}))
+        await actor.dispatch(SessionEvent("caller.speech_stopped"))
+        await live_tests.wait_until(lambda: bool(telephony.sent_audio))
+        await actor.dispatch(SessionEvent("caller.speech_started"))
+
+        self.assertEqual([b"complete exact proposal"], [c.payload for c in telephony.sent_audio])
+        self.assertEqual(
+            [exact],
+            [e["transcript"] for e in sink.events if e["event_type"] == "assistant.turn"],
+        )
+
     async def test_progress_has_ack_cutoff_and_duplicate_stop_does_not_repeat_it(self):
         control = FakeControlPlane(application_owns_completed_turn=True, application_gate_progress_message="Thank you. I'm checking your confirmation now.")
         voice, telephony = FakeVoice(instruction_sequence=5), FakeTelephony()

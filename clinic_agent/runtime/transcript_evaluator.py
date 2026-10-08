@@ -31,10 +31,14 @@ _BASELINE_FAILURES = frozenset(
         "identity_turn_unprocessed",
         "noncanonical_slot_filter",
         "no_slot_follow_up_missing",
+        "availability_failure_without_search",
+        "substantive_follow_up_request_discarded",
+        "confirmed_mutation_conflict",
         "slot_search_follow_up_unverifiable",
         "workflow_incomplete_at_hangup",
         "follow_on_request_blocked",
         "reschedule_clinic_approval_bypassed",
+        "accepted_follow_up_no_progress",
     }
 )
 
@@ -49,6 +53,9 @@ _FLAG_MESSAGES = {
     "excessive_interruption_burst": "Assistant playback was interrupted at least three times in six seconds.",
     "noncanonical_slot_filter": "Availability search used a display label where a canonical identifier was required.",
     "no_slot_follow_up_missing": "A zero-result availability search had no spoken follow-up.",
+    "availability_failure_without_search": "The assistant claimed availability could not be retrieved without attempting a fresh slot search.",
+    "substantive_follow_up_request_discarded": "A substantive request after the post-task offer was classified as call closure and discarded.",
+    "confirmed_mutation_conflict": "A caller-confirmed appointment mutation reached a backend conflict instead of the promised outcome.",
     "slot_search_follow_up_unverifiable": "Availability search result could not be verified and had no follow-up.",
     "workflow_incomplete_at_hangup": "The call ended with a scheduling workflow still in progress.",
     "follow_on_request_blocked": "A new scheduling request was rejected only because an earlier task in the same call had completed.",
@@ -61,6 +68,9 @@ _FLAG_MESSAGES = {
     "outbound_post_identity_purpose_reset": "Outbound call reset to a generic help prompt after identity instead of preserving its scheduling-callback purpose.",
     "exact_application_reply_not_honored": "Assistant did not say the application-owned exact reply and nothing else.",
     "authoritative_directive_delivery_failed": "The application could not deliver an authoritative gate response to the Live session.",
+    "application_audio_delivery_failed": "Application-owned speech failed before verified caller playback.",
+    "application_audio_delivery_incomplete": "Application-owned speech started but never reached a verified final playback mark.",
+    "application_reply_playback_unverified": "An exact application reply was only observed when the call stopped, so caller playback was not verified.",
     "identity_progress_update_missing": "Identity verification ran without the promised immediate caller-facing progress update.",
     "identity_progress_update_late": "The caller-facing identity progress update started too late.",
     "confirmation_progress_update_missing": "Confirmation classification ran without the promised immediate caller-facing progress update.",
@@ -68,6 +78,7 @@ _FLAG_MESSAGES = {
     "confirmation_before_proposal_armed": "A caller turn was interpreted as confirmation before the exact proposal was armed for a later turn.",
     "caller_close_not_honored": "Caller explicitly ended the call, but the assistant continued or stalled instead of closing cleanly.",
     "normal_active_turn_no_progress": "A completed normal ACTIVE caller turn received no downstream progress within its deadline.",
+    "accepted_follow_up_no_progress": "An accepted post-task request returned to ACTIVE but produced no tool, completed reply, recovery, or handoff.",
 }
 
 _WRITE_TOOLS = frozenset(
@@ -136,6 +147,24 @@ _ASSISTANT_TERMINAL_CLOSE_PATTERNS = (
     re.compile(r"\btake care\b", re.I),
     re.compile(r"\b(?:goodbye|bye)\b", re.I),
     re.compile(r"\bhave a (?:good|great|nice) day\b", re.I),
+)
+
+_AVAILABILITY_REQUEST_PATTERN = re.compile(
+    r"\b(?:available|availability|opening|openings|slot|slots|timing|timings)\b",
+    re.I,
+)
+
+_AVAILABILITY_RETRIEVAL_FAILURE_PATTERN = re.compile(
+    r"\b(?:can(?:not|'t)|could(?: not|n't)|was(?: not|n't) able to|unable to)\s+"
+    r"(?:retrieve|check|access|find)\s+(?:the\s+)?availability\b",
+    re.I,
+)
+
+_SUBSTANTIVE_FOLLOW_UP_REQUEST_PATTERN = re.compile(
+    r"\b(?:do i have|are there|is there|can you|could you|would you|"
+    r"i would like to know|tell me|what|when|where|how|parking|insurance|"
+    r"prerequisite|prerequisites|provider|doctor|arrival)\b",
+    re.I,
 )
 
 
@@ -285,7 +314,9 @@ def evaluate_voice_events(
             )
 
     issues.extend(_transcript_issues(rows))
+    issues.extend(_availability_grounding_issues(rows))
     issues.extend(_normal_turn_liveness_issues(rows))
+    issues.extend(_accepted_follow_up_liveness_issues(rows))
     issues = _deduplicate_issues(issues)
     failures = sum(issue.severity == "failure" for issue in issues)
     observations = sum(issue.severity == "observation" for issue in issues)
@@ -327,6 +358,60 @@ def render_voice_evaluation(result: VoiceEvaluationResult) -> str:
     return "\n".join(lines)
 
 
+def _availability_grounding_issues(
+    rows: list[Mapping[str, Any]],
+) -> list[VoiceEvaluationIssue]:
+    """Fail closed when a retrieval-failure claim has no matching tool attempt."""
+
+    issues: list[VoiceEvaluationIssue] = []
+    for run in _indexed_call_runs(rows):
+        request_index: int | None = None
+        search_attempted = False
+        for index, event in run:
+            event_type = event.get("event_type")
+            if event_type == "caller.turn":
+                transcript = event.get("transcript")
+                request_index = (
+                    index
+                    if isinstance(transcript, str)
+                    and _AVAILABILITY_REQUEST_PATTERN.search(transcript)
+                    else None
+                )
+                search_attempted = False
+                continue
+            if (
+                request_index is not None
+                and event_type in {"tool.requested", "tool.decision"}
+                and event.get("tool_name") == "search_slots"
+            ):
+                search_attempted = True
+                continue
+            if event_type != "assistant.turn" or request_index is None:
+                continue
+            transcript = event.get("transcript")
+            if (
+                isinstance(transcript, str)
+                and _AVAILABILITY_RETRIEVAL_FAILURE_PATTERN.search(
+                    transcript.replace("’", "'")
+                )
+                and not search_attempted
+            ):
+                issues.append(
+                    VoiceEvaluationIssue(
+                        code="availability_failure_without_search",
+                        severity="failure",
+                        message=_FLAG_MESSAGES[
+                            "availability_failure_without_search"
+                        ],
+                        event_indexes=(request_index, index),
+                        evidence=(_compact_evidence(transcript),),
+                    )
+                )
+            request_index = None
+            search_attempted = False
+    return issues
+
+
 def _normal_turn_liveness_issues(rows: list[Mapping[str, Any]]) -> list[VoiceEvaluationIssue]:
     """Check the first-progress deadline without mistaking backend latency for silence.
 
@@ -352,10 +437,27 @@ def _normal_turn_liveness_issues(rows: list[Mapping[str, Any]]) -> list[VoiceEva
         "control.normal_turn_progress", "handoff.requested", "voice.error",
         "voice.failed_mid_call", "control.completed_turn_failed",
     }
+
+    def is_attributable_progress(event: Mapping[str, Any]) -> bool:
+        """Raw model output is ambiguous immediately after a barge-in.
+
+        A trailing audio/transcript frame from the preceding response used to
+        clear the next turn's liveness check.  Runtime-owned/backend events and a
+        completed assistant turn are attributable; raw output markers alone are
+        not sufficient evidence that the latest caller request was handled.
+        """
+        kind = event.get("event_type")
+        if kind == "control.normal_turn_progress" and event.get("progress_kind") in {
+            "assistant_audio", "assistant_transcript",
+        }:
+            return False
+        return kind in progress_events
+
     issues: list[VoiceEvaluationIssue] = []
     for run in groups.values():
         pending: dict[str, Any] | None = None
         boundary_index = -1
+        attributable_progress_since_boundary = False
 
         def failure(index: int, event: Mapping[str, Any]) -> None:
             nonlocal pending
@@ -400,6 +502,7 @@ def _normal_turn_liveness_issues(rows: list[Mapping[str, Any]]) -> list[VoiceEva
                 # already elapsed above remains a failure.
                 pending = None
                 boundary_index = index
+                attributable_progress_since_boundary = False
             if (
                 kind == "patient.turn_observed"
                 and event.get("workflow_before") == "active"
@@ -413,7 +516,7 @@ def _normal_turn_liveness_issues(rows: list[Mapping[str, Any]]) -> list[VoiceEva
                     "transcript": event.get("transcript"),
                 }
                 # Work can start between VAD/turn settling and observation.
-                if boundary_index >= 0 and any(e.get("event_type") in progress_events for j, e in run
+                if boundary_index >= 0 and any(is_attributable_progress(e) for j, e in run
                        if boundary_index < j < index):
                     pending = None
             if kind == "control.normal_turn_completed" and not event.get("progress_seen") and pending is None:
@@ -422,7 +525,11 @@ def _normal_turn_liveness_issues(rows: list[Mapping[str, Any]]) -> list[VoiceEva
                     "epoch": event.get("turn_epoch"), "token": event.get("activity_token"),
                     "timeout": NORMAL_TURN_PROGRESS_TIMEOUT, "transcript": None,
                 }
-            if kind == "control.normal_turn_completed" and event.get("progress_seen"):
+            if (
+                kind == "control.normal_turn_completed"
+                and event.get("progress_seen")
+                and attributable_progress_since_boundary
+            ):
                 pending = None
             if pending is not None:
                 if kind == "caller.turn" and pending["epoch"] is None:
@@ -442,11 +549,99 @@ def _normal_turn_liveness_issues(rows: list[Mapping[str, Any]]) -> list[VoiceEva
                 if kind == "control.normal_turn_liveness_failed" and same_activity:
                     failure(index, event)
                 elif same_activity and (
-                    kind in progress_events
+                    is_attributable_progress(event)
                     or (kind == "workflow.transition" and event.get("current")
                         and event.get("current") != "active")
                 ):
                     pending = None
+            if is_attributable_progress(event):
+                attributable_progress_since_boundary = True
+    return issues
+
+
+def _accepted_follow_up_liveness_issues(
+    rows: list[Mapping[str, Any]],
+) -> list[VoiceEvaluationIssue]:
+    """Require every gate-to-ACTIVE branch to reach a terminally useful edge.
+
+    Instruction acceptance and a first audio frame are deliberately insufficient:
+    the production failure that motivated this check recorded both, then stranded
+    the provider response without a tool call or completed caller-visible turn.
+    """
+
+    useful_progress = {
+        "tool.requested",
+        "tool.decision",
+        "tool.completed",
+        "backend.tool_completed",
+        "assistant.turn",
+        "handoff.requested",
+        "control.normal_turn_recovery_appended",
+        "voice.error",
+        "voice.failed_mid_call",
+    }
+    issues: list[VoiceEvaluationIssue] = []
+    for run in _indexed_call_runs(rows):
+        pending: dict[str, Any] | None = None
+        for index, event in run:
+            kind = event.get("event_type")
+            timestamp = _occurred_at(event)
+            if pending is not None:
+                started_at = pending["started_at"]
+                elapsed = None
+                if started_at is not None and timestamp is not None:
+                    try:
+                        elapsed = (timestamp - started_at).total_seconds()
+                    except TypeError:
+                        pass
+                if kind in useful_progress:
+                    pending = None
+                elif kind == "control.normal_turn_liveness_failed":
+                    elapsed_text = "unknown" if elapsed is None else f"{elapsed:.3f}"
+                    issues.append(
+                        VoiceEvaluationIssue(
+                            code="accepted_follow_up_no_progress",
+                            severity="failure",
+                            message=_FLAG_MESSAGES["accepted_follow_up_no_progress"],
+                            event_indexes=(pending["index"], index),
+                            evidence=(
+                                f"deadline_seconds={NORMAL_TURN_PROGRESS_TIMEOUT}; elapsed_seconds={elapsed_text}",
+                                _compact_evidence(str(pending["transcript"])),
+                            ),
+                        )
+                    )
+                    pending = None
+                elif (
+                    elapsed is not None
+                    and elapsed > NORMAL_TURN_PROGRESS_TIMEOUT
+                ) or kind in {"call.remote_stop", "call.ended"}:
+                    elapsed_text = "unknown" if elapsed is None else f"{elapsed:.3f}"
+                    issues.append(
+                        VoiceEvaluationIssue(
+                            code="accepted_follow_up_no_progress",
+                            severity="failure",
+                            message=_FLAG_MESSAGES["accepted_follow_up_no_progress"],
+                            event_indexes=(pending["index"], index),
+                            evidence=(
+                                f"deadline_seconds={NORMAL_TURN_PROGRESS_TIMEOUT}; elapsed_seconds={elapsed_text}",
+                                _compact_evidence(str(pending["transcript"])),
+                            ),
+                        )
+                    )
+                    pending = None
+
+            if (
+                kind == "patient.turn_processed"
+                and event.get("workflow_before")
+                in {"awaiting_follow_up_decision", "completed"}
+                and event.get("workflow_after") == "active"
+                and event.get("directive_kind") == "model_input"
+            ):
+                pending = {
+                    "index": index,
+                    "started_at": timestamp,
+                    "transcript": event.get("transcript") or "",
+                }
     return issues
 
 
@@ -475,6 +670,7 @@ def _transcript_issues_for_run(
     exact_questions: dict[str, list[int]] = {}
     expected_exact_digest: str | None = None
     expected_exact_event_index: int | None = None
+    expected_exact_at: datetime | None = None
     pending_identity_progress_index: int | None = None
     pending_identity_progress_at: datetime | None = None
     pending_progress_kind = "identity"
@@ -483,9 +679,79 @@ def _transcript_issues_for_run(
     armed_confirmation_epoch: int | None = None
     confirmation_is_armed = False
     confirmation_delivery_protocol_seen = False
+    pending_application_audio_index: int | None = None
 
     for index, event in indexed_rows:
         event_type = event.get("event_type")
+        if event_type == "assistant.application_audio_render_started":
+            pending_application_audio_index = index
+        if event_type in {
+            "assistant.application_audio_completed",
+            "assistant.application_audio_interrupted",
+            "assistant.application_audio_stale",
+        }:
+            pending_application_audio_index = None
+        if event_type in {
+            "assistant.application_audio_render_failed",
+            "assistant.application_audio_timeout",
+        }:
+            issues.append(
+                VoiceEvaluationIssue(
+                    code="application_audio_delivery_failed",
+                    severity="failure",
+                    message=_FLAG_MESSAGES["application_audio_delivery_failed"],
+                    event_indexes=(index,),
+                    evidence=(str(event_type),),
+                )
+            )
+            pending_application_audio_index = None
+        if event_type == "call.ended" and pending_application_audio_index is not None:
+            issues.append(
+                VoiceEvaluationIssue(
+                    code="application_audio_delivery_incomplete",
+                    severity="failure",
+                    message=_FLAG_MESSAGES["application_audio_delivery_incomplete"],
+                    event_indexes=(pending_application_audio_index, index),
+                )
+            )
+            pending_application_audio_index = None
+        if (
+            event_type == "confirmation.mutation_executed"
+            and event.get("domain_status") == "conflict"
+        ):
+            proposal_id = str(event.get("proposal_id") or "unknown")
+            tool_name = str(event.get("tool_name") or "appointment mutation")
+            issues.append(
+                VoiceEvaluationIssue(
+                    code="confirmed_mutation_conflict",
+                    severity="failure",
+                    message=_FLAG_MESSAGES["confirmed_mutation_conflict"],
+                    event_indexes=(index,),
+                    evidence=(
+                        f"proposal_id={proposal_id}; tool={tool_name}; domain_status=conflict",
+                    ),
+                )
+            )
+        if (
+            event_type == "patient.turn_processed"
+            and event.get("workflow_before") == "awaiting_follow_up_decision"
+            and event.get("workflow_after") == "completed"
+            and isinstance(event.get("transcript"), str)
+            and _SUBSTANTIVE_FOLLOW_UP_REQUEST_PATTERN.search(
+                str(event["transcript"])
+            )
+        ):
+            issues.append(
+                VoiceEvaluationIssue(
+                    code="substantive_follow_up_request_discarded",
+                    severity="failure",
+                    message=_FLAG_MESSAGES[
+                        "substantive_follow_up_request_discarded"
+                    ],
+                    event_indexes=(index,),
+                    evidence=(_compact_evidence(str(event["transcript"])),),
+                )
+            )
         if event_type == "control.completed_turn_delivery_failed":
             issues.append(
                 VoiceEvaluationIssue(
@@ -541,11 +807,13 @@ def _transcript_issues_for_run(
         ):
             expected_exact_digest = str(event["directive_digest"])
             expected_exact_event_index = index
+            expected_exact_at = _occurred_at(event)
         if event_type == "confirmation.pre_delivery_continuation":
             confirmation_is_armed = False
             armed_confirmation_epoch = None
             expected_exact_digest = None
             expected_exact_event_index = None
+            expected_exact_at = None
         if event_type == "confirmation.semantic_interpreted":
             value = event.get("turn_epoch")
             confirmation_epoch = int(value) if isinstance(value, int) else None
@@ -586,6 +854,7 @@ def _transcript_issues_for_run(
         ):
             expected_exact_digest = str(event["directive_digest"])
             expected_exact_event_index = index
+            expected_exact_at = _occurred_at(event)
         if event_type == "tool.requested":
             outbound_identity_continuation_pending = False
         if (
@@ -627,6 +896,36 @@ def _transcript_issues_for_run(
         if not isinstance(transcript, str) or not transcript.strip():
             continue
 
+        exact_reply_at = _occurred_at(event)
+        exact_reply_latency_seconds = (
+            (exact_reply_at - expected_exact_at).total_seconds()
+            if exact_reply_at is not None and expected_exact_at is not None
+            else None
+        )
+        if (
+            expected_exact_digest is not None
+            and event.get("reason") == "call_stopped"
+            and exact_reply_latency_seconds is not None
+            and exact_reply_latency_seconds > 15
+        ):
+            evidence: tuple[str, ...] = (
+                "Exact reply transcript was deferred until call termination; "
+                f"latency_seconds={exact_reply_latency_seconds:.1f}.",
+            )
+            issues.append(
+                VoiceEvaluationIssue(
+                    code="application_reply_playback_unverified",
+                    severity="failure",
+                    message=_FLAG_MESSAGES["application_reply_playback_unverified"],
+                    event_indexes=tuple(
+                        value
+                        for value in (expected_exact_event_index, index)
+                        if value is not None
+                    ),
+                    evidence=evidence,
+                )
+            )
+
         if pending_caller_close_index is not None:
             if not any(
                 pattern.search(transcript)
@@ -667,6 +966,7 @@ def _transcript_issues_for_run(
                 )
             expected_exact_digest = None
             expected_exact_event_index = None
+            expected_exact_at = None
 
         if identity_unlocked and any(
             pattern.search(transcript) for pattern in _IDENTITY_PENDING_PATTERNS

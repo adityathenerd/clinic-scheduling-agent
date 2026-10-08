@@ -48,6 +48,9 @@ class GuardedToolRuntimeTests(unittest.TestCase):
 
         self.assertEqual("ok", result["status"])
         appointment = result["appointment"]
+        self.assertEqual("dermatology-followup", appointment["appointment_type_id"])
+        self.assertEqual("provider-mehta", appointment["provider_id"])
+        self.assertEqual("downtown", appointment["location_id"])
         details = appointment["patient_facing_details"]
         self.assertEqual("Dermatology follow-up", details["appointment_type"])
         self.assertEqual("Dr. N. Mehta", details["provider"])
@@ -84,6 +87,30 @@ class GuardedToolRuntimeTests(unittest.TestCase):
         self.assertNotIn("prerequisite", summary.casefold())
         self.assertNotIn("dose", summary.casefold())
         self.assertNotIn("effective", summary.casefold())
+
+    def test_appointment_read_supplies_canonical_ids_for_availability_search(self) -> None:
+        subject = runtime()
+
+        appointment = subject.execute(
+            "get_appointment", {"appointment_id": "appointment-existing"}
+        )["appointment"]
+        result = subject.execute(
+            "search_slots",
+            {
+                "appointment_type": appointment["appointment_type_id"],
+                "date_from": "2026-10-09",
+                "date_to": "2026-10-10",
+                "provider_id": appointment["provider_id"],
+                "location_id": appointment["location_id"],
+            },
+        )
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(3, len(result["slots"]))
+        self.assertEqual(
+            {"slot-1530", "slot-1630", "slot-1100"},
+            {slot["slot_id"] for slot in result["slots"]},
+        )
 
     def test_real_prerequisite_is_included_when_policy_defines_one(self) -> None:
         subject = runtime()
@@ -217,14 +244,18 @@ class GuardedToolRuntimeTests(unittest.TestCase):
         self.assertEqual("confirmation_required", first["status"])
         self.assertNotIn("appointment-0001", subject.harness.store.appointments)
 
-        subject.begin_patient_turn("yes, confirm")
+        subject.begin_patient_turn(
+            "yes, confirm",
+            confirmation_decision=ConfirmationDecision.CONFIRMED,
+            require_semantic_confirmation=True,
+        )
         second = subject.execute("create_appointment", {"slot_id": "slot-1530"})
 
         self.assertEqual("proposed", second["status"])
         self.assertEqual("proposal_created", second["operation"])
         self.assertEqual(WorkflowState.AWAITING_FOLLOW_UP_DECISION, state.state)
         self.assertIn(
-            "Would you like any other scheduling help?",
+            "Would you like any other scheduling or clinic information help?",
             second["patient_facing_summary"],
         )
 
@@ -271,7 +302,7 @@ class GuardedToolRuntimeTests(unittest.TestCase):
         self.assertIn("held for clinic review", result["patient_facing_summary"])
         self.assertIn("remains in place until approval", result["patient_facing_summary"])
         self.assertIn(
-            "Would you like any other scheduling help?",
+            "Would you like any other scheduling or clinic information help?",
             result["patient_facing_summary"],
         )
         self.assertEqual(WorkflowState.AWAITING_FOLLOW_UP_DECISION, state.state)
@@ -284,6 +315,55 @@ class GuardedToolRuntimeTests(unittest.TestCase):
             subject.harness.store.appointments[
                 "appointment-existing"
             ].pending_replacement_slot_id,
+        )
+
+    def test_new_reschedule_proposal_discloses_replacement_of_existing_hold(self) -> None:
+        subject = runtime()
+        subject.execute(
+            "search_slots",
+            {
+                "appointment_type": "dermatology-followup",
+                "date_from": "2026-10-09",
+                "date_to": "2026-10-09",
+                "provider_id": "provider-mehta",
+                "location_id": "downtown",
+            },
+        )
+        first_arguments = {
+            "appointment_id": "appointment-existing",
+            "replacement_slot_id": "slot-1630",
+        }
+        subject.execute("edit_appointment", first_arguments)
+        subject.begin_patient_turn(
+            "yes, confirm",
+            confirmation_decision=ConfirmationDecision.CONFIRMED,
+            require_semantic_confirmation=True,
+        )
+        first = subject.execute("edit_appointment", first_arguments)
+        self.assertEqual("proposed", first["status"])
+
+        subject.execute(
+            "search_slots",
+            {
+                "appointment_type": "dermatology-followup",
+                "date_from": "2026-10-12",
+                "date_to": "2026-10-12",
+                "provider_id": "provider-mehta",
+                "location_id": "downtown",
+            },
+        )
+        second = subject.execute(
+            "edit_appointment",
+            {
+                "appointment_id": "appointment-existing",
+                "replacement_slot_id": "slot-mehta-20261012-1130",
+            },
+        )
+
+        self.assertEqual("confirmation_required", second["status"])
+        self.assertIn(
+            "replace your pending rescheduling request for Friday, October 9, 2026 at 4:30 PM IST",
+            second["exact_proposal"],
         )
 
     def test_unclear_semantic_confirmation_preserves_exact_proposal(self) -> None:
